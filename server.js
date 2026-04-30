@@ -34,6 +34,7 @@ async function sendTelegramLog(msg) {
 
 async function sendTelegramScreenshot(page, caption) {
     try {
+        if (!page || page.isClosed()) return;
         const screenshotBuffer = await page.screenshot({ type: 'jpeg', quality: 50 });
         const form = new FormData();
         form.append('chat_id', TELEGRAM_CHAT_ID);
@@ -85,9 +86,9 @@ const HTML_CONTENT = `
         .main-content { display: flex; gap: 20px; flex-direction: column; }
         @media (min-width: 768px) { .main-content { flex-direction: row; } }
         .screenshot-container { flex: 1.2; border: 1px solid rgba(255, 0, 127, 0.4); border-radius: 12px; overflow: hidden; background-color: #000; position: relative; display: flex; justify-content: center; align-items: center; min-height: 250px;}
-        #live-screen { width: 100%; max-height: 500px; object-fit: contain; border-radius: 12px;}
         .terminal { flex: 1; background-color: #000; color: #a9b7c6; padding: 20px; border-radius: 12px; height: 350px; overflow-y: auto; border: 1px solid #333; font-size: 14px; line-height: 1.6; font-family: 'Courier New', monospace; box-shadow: inset 0 0 10px rgba(0,0,0,0.8);}
         .log-info { color: #00b3ff; } .log-success { color: var(--success); font-weight: bold; } .log-error { color: var(--error); font-weight: bold; } .log-warn { color: #ffaa00; } .log-time { color: #666; font-size: 12px; margin-right: 8px;}
+        #static-img { width: 100%; object-fit: contain; border-radius: 12px; opacity: 0.5; }
     </style>
 </head>
 <body>
@@ -103,7 +104,7 @@ const HTML_CONTENT = `
         </div>
         <div class="main-content">
             <div class="screenshot-container">
-                <img id="live-screen" src="https://via.placeholder.com/800x450/000000/00ffcc?text=STREAM+OFFLINE" alt="Live Stream" />
+                <img id="static-img" src="https://via.placeholder.com/800x450/000000/00ffcc?text=LIVE+STREAM+DISABLED+FOR+SPEED" alt="Disabled Stream" />
             </div>
             <div class="terminal" id="logs">
                 <div class="log-info">> System Initialized. Auto-Renew supported.</div>
@@ -131,7 +132,6 @@ const HTML_CONTENT = `
             statusDiv.style.color = data.color;
             startBtn.disabled = data.state === 'running';
         });
-        socket.on('live_stream', (b64) => { document.getElementById('live-screen').src = 'data:image/jpeg;base64,' + b64; });
 
         function startBot() {
             const uid = document.getElementById('uid').value.trim();
@@ -170,7 +170,6 @@ io.on('connection', (socket) => {
             let browser;
             let page;
             try {
-                // YAHAN SE EXECUTABLE PATH HATA DIYA HAI. PUPPETEER KHUD BROWSER DOWNLOAD/USE KAREGA.
                 browser = await puppeteer.launch({
                     headless: "new",
                     defaultViewport: { width: 1024, height: 768 }, 
@@ -186,11 +185,14 @@ io.on('connection', (socket) => {
 
                 page = await browser.newPage();
                 
-                const client = await page.target().createCDPSession();
-                await client.send('Page.startScreencast', { format: 'jpeg', quality: 20 });
-                client.on('Page.screencastFrame', async (frame) => {
-                    socket.emit('live_stream', frame.data); 
-                    try { await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }); } catch(e){}
+                // Memory Optimization: Block fonts and media to speed up load, but keep images for screenshots
+                await page.setRequestInterception(true);
+                page.on('request', (req) => {
+                    if (['font', 'media'].includes(req.resourceType())) {
+                        req.abort();
+                    } else {
+                        req.continue();
+                    }
                 });
 
                 const checkHardBlock = async () => {
@@ -200,10 +202,11 @@ io.on('connection', (socket) => {
                 const smartClick = async (textPattern, logName) => {
                     if (await checkHardBlock()) throw new Error("HARD_BLOCK");
                     try {
+                        // Timeout barha kar 60 seconds kar diya hai Railway ke liye
                         await page.waitForFunction((pattern) => {
                             const elements = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
                             return elements.find(el => el.innerText && el.innerText.match(new RegExp(pattern, 'i')) && el.offsetHeight > 0);
-                        }, { timeout: 25000 }, textPattern);
+                        }, { timeout: 60000 }, textPattern);
 
                         await page.evaluate((pattern) => {
                             const elements = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
@@ -218,10 +221,11 @@ io.on('connection', (socket) => {
                     }
                 };
 
-                await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-                await sendTelegramScreenshot(page, `Bypassing Initial Ad for UID: ${targetUid}`); 
+                await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+                await sendTelegramScreenshot(page, `🌐 [${targetUid}] Website Loaded`); 
                 
                 await smartClick('without Discord', 'Bypass Initial Discord');
+                await sendTelegramScreenshot(page, `🔓 [${targetUid}] Bypassed Initial Discord`); 
                 
                 await page.waitForSelector('input:not([type="hidden"]):not([type="checkbox"])', {visible: true});
                 emitLog(`Injecting UID: ${targetUid}`, 'warn');
@@ -229,26 +233,31 @@ io.on('connection', (socket) => {
                     const input = document.querySelector('input:not([type="hidden"]):not([type="checkbox"])');
                     if(input) { input.focus(); input.value = val; input.dispatchEvent(new Event('input', {bubbles: true})); }
                 }, targetUid);
+                await sendTelegramScreenshot(page, `💉 [${targetUid}] UID Injected in Field`); 
 
                 await smartClick(UNIVERSAL_BTN_REGEX, 'Submit UID');
+                await sendTelegramScreenshot(page, `🚀 [${targetUid}] Submitted UID`); 
                 
                 for (let i = 1; i <= 5; i++) {
                     socket.emit('status', { text: `[${targetUid}] STEP ${i}/5 ⏳`, color: '#ffaa00', state: 'running' });
                     if (await checkHardBlock()) throw new Error("HARD_BLOCK");
                     
                     await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 1st Click`);
+                    await sendTelegramScreenshot(page, `🖱️ [${targetUid}] Step ${i} - First Click Done`);
+                    
                     emitLog(`Step ${i}: Waiting 11 seconds...`, 'warn');
                     await new Promise(r => setTimeout(r, 11000));
                     
                     if (await checkHardBlock()) throw new Error("HARD_BLOCK");
 
                     await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 2nd Click`);
+                    await sendTelegramScreenshot(page, `🖱️ [${targetUid}] Step ${i} - Second Click Done`);
                     
-                    await sendTelegramScreenshot(page, `Completed Step ${i}/5 for UID: ${targetUid}`);
                     await new Promise(r => setTimeout(r, 2000)); 
                 }
 
                 emitLog('Verifying...', 'info');
+                await sendTelegramScreenshot(page, `🔍 [${targetUid}] Verifying Success...`);
                 await new Promise(r => setTimeout(r, 4000)); 
 
                 const isSuccess = await page.evaluate(() => {
