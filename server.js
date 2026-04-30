@@ -1,4 +1,3 @@
-
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -134,13 +133,11 @@ app.get('/', (req, res) => res.send(HTML_CONTENT));
 
 io.on('connection', (socket) => {
     
-    // Pattern jo saari variations ko cover karega (Continue, without discord, an ad will open, etc.)
     const UNIVERSAL_BTN_REGEX = 'Continue|Proceed|Next|an ad will open|without Discord|Submit|Renew';
 
     socket.on('start_bot', async (data) => {
         let { uid, autoRenew } = data;
         
-        // JSON file se UIDs fetch karo aur agar new uid hai toh usay save karo
         let uidsToProcess = saveAndGetUids(uid);
 
         if (uidsToProcess.length === 0) {
@@ -149,24 +146,29 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Ye function sirf ek specific UID ko bypass karega
         const processSingleUid = async (targetUid, attemptNum) => {
             socket.emit('log', { msg: `[${targetUid}] - ATTEMPT ${attemptNum} STARTED`, type: 'info' });
             
             let browser;
             try {
+                // RAILWAY OPTIMIZED PUPPETEER LAUNCH
                 browser = await puppeteer.launch({
-                    executablePath: '/data/data/com.termux/files/usr/bin/chromium-browser', 
-                    headless: true, 
+                    headless: "new", // Railway ke liye new headless mode behtar hai
                     defaultViewport: { width: 1024, height: 768 }, 
-                    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+                    args: [
+                        '--no-sandbox', 
+                        '--disable-setuid-sandbox', 
+                        '--disable-dev-shm-usage', // Important for Railway Memory limits
+                        '--disable-gpu',           // Important for Cloud Hosting
+                        '--disable-blink-features=AutomationControlled'
+                    ]
                 });
 
                 const page = await browser.newPage();
                 
-                // Live Stream setup
+                // Live Stream setup (Takes memory, but kept as requested)
                 const client = await page.target().createCDPSession();
-                await client.send('Page.startScreencast', { format: 'jpeg', quality: 35 }); 
+                await client.send('Page.startScreencast', { format: 'jpeg', quality: 20 }); // Quality reduced slightly to save bandwidth/RAM
                 client.on('Page.screencastFrame', async (frame) => {
                     socket.emit('live_stream', frame.data); 
                     try { await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }); } catch(e){}
@@ -210,24 +212,21 @@ io.on('connection', (socket) => {
                     if(input) { input.focus(); input.value = val; input.dispatchEvent(new Event('input', {bubbles: true})); }
                 }, targetUid);
 
-                // FORAN submit dabao (using universal regex)
+                // FORAN submit dabao
                 await smartClick(UNIVERSAL_BTN_REGEX, 'Submit UID');
                 
-                // THE 5-STEPS LOOP (WITH 11 SECONDS AND UNIVERSAL BUTTON)
+                // THE 5-STEPS LOOP
                 for (let i = 1; i <= 5; i++) {
                     socket.emit('status', { text: `[${targetUid}] STEP ${i}/5 ⏳`, color: '#ffaa00', state: 'running' });
                     if (await checkHardBlock()) throw new Error("HARD_BLOCK");
                     
-                    // Click 1
                     await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 1st Click`);
                     
-                    // 11 SECONDS WAIT
                     socket.emit('log', { msg: `Step ${i}: Waiting 11 seconds...`, type: 'warn' });
                     await new Promise(r => setTimeout(r, 11000));
                     
                     if (await checkHardBlock()) throw new Error("HARD_BLOCK");
 
-                    // Click 2
                     await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 2nd Click`);
                     await new Promise(r => setTimeout(r, 2000)); 
                 }
@@ -256,41 +255,31 @@ io.on('connection', (socket) => {
                 } else {
                     socket.emit('log', { msg: `⚠️ Hiccup: ${error.message.replace('Error: ', '')}. Restarting...`, type: 'error' });
                 }
-                return false; // Failed, needs retry
+                return false; 
             }
         };
 
-        // --- MASTER SCHEDULER (Handles multiple UIDs & 15 mins loop) ---
         socket.emit('status', { text: `STARTING ENGINE...`, color: '#00ffcc', state: 'running' });
-        
         let engineRunning = true;
         
         const runScheduler = async () => {
             while (engineRunning) {
-                
-                // Saari saved UIDs par loop chalao
                 for (let i = 0; i < uidsToProcess.length; i++) {
                     let currentUid = uidsToProcess[i];
                     socket.emit('log', { msg: `====================================`, type: 'warn' });
                     socket.emit('log', { msg: `🎯 TARGETING UID [${i+1}/${uidsToProcess.length}]: ${currentUid}`, type: 'success' });
                     
-                    // Har UID ke liye max 100 tries (Zero Cooldown)
                     for (let tryNum = 1; tryNum <= 100; tryNum++) {
                         const isDone = await processSingleUid(currentUid, tryNum);
-                        if (isDone) break; // Agli UID par chalo
-                        await new Promise(r => setTimeout(r, 1000)); // 1 sec saans lo error ke baad
+                        if (isDone) break;
+                        await new Promise(r => setTimeout(r, 1000)); 
                     }
                 }
 
-                // Loop khatam hone ke baad dekho 15 mins repeat on hai ya off
                 if (autoRenew) {
                     socket.emit('status', { text: 'WAITING 15 MINS ⏳', color: '#ffaa00', state: 'running' });
                     socket.emit('log', { msg: `🔄 All UIDs processed. Sleeping for 15 minutes before auto-renewal...`, type: 'warn' });
-                    
-                    // 15 Minutes Wait (900000 ms)
                     await new Promise(r => setTimeout(r, 15 * 60 * 1000)); 
-                    
-                    // Dobara loop chalanay se pehle JSON dobara read karo taake new entries pick ho sakein
                     uidsToProcess = saveAndGetUids(); 
                 } else {
                     socket.emit('status', { text: 'ALL TASKS COMPLETED ✅', color: '#39ff14', state: 'idle' });
@@ -300,15 +289,15 @@ io.on('connection', (socket) => {
             }
         };
 
-        // Start the engine
         runScheduler();
     });
 });
 
-const PORT = 3000;
-server.listen(PORT, () => {
+// RAILWAY OPTIMIZED PORT CONFIGURATION
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
     console.log(`⚡ RAPID FIRE ULTIMATE RUNNING!`);
-    console.log(`👉 http://localhost:${PORT}`);
+    console.log(`👉 Bound to Port: ${PORT}`);
     console.log(`=========================================\n`);
 });
