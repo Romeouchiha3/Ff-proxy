@@ -7,7 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
-const { execSync } = require('child_process'); // ✨ Auto-path detect karne ke liye
 
 puppeteer.use(StealthPlugin());
 
@@ -48,7 +47,6 @@ async function sendTelegramScreenshot(page, caption) {
         console.error('Telegram Screenshot Error:', error.message);
     }
 }
-// ------------------------------
 
 function saveAndGetUids(newUid) {
     let uids = [];
@@ -152,7 +150,6 @@ app.get('/', (req, res) => res.send(HTML_CONTENT));
 io.on('connection', (socket) => {
     const UNIVERSAL_BTN_REGEX = 'Continue|Proceed|Next|an ad will open|without Discord|Submit|Renew';
 
-    // Helper to send logs to BOTH Web UI and Telegram
     const emitLog = (msg, type = 'info') => {
         socket.emit('log', { msg, type });
         sendTelegramLog(`[${type.toUpperCase()}] ${msg}`);
@@ -173,18 +170,8 @@ io.on('connection', (socket) => {
             let browser;
             let page;
             try {
-                // ✨ DYNAMIC PATH LOGIC (Railway Nixpacks Fix) ✨
-                let chromiumPath = '/usr/bin/chromium';
-                try {
-                    // System se asli path khud dhoondega
-                    chromiumPath = execSync('which chromium').toString().trim();
-                    emitLog(`Chromium found at: ${chromiumPath}`, 'info');
-                } catch (err) {
-                    emitLog(`which command failed, trying default path.`, 'warn');
-                }
-
+                // YAHAN SE EXECUTABLE PATH HATA DIYA HAI. PUPPETEER KHUD BROWSER DOWNLOAD/USE KAREGA.
                 browser = await puppeteer.launch({
-                    executablePath: chromiumPath,
                     headless: "new",
                     defaultViewport: { width: 1024, height: 768 }, 
                     args: [
@@ -199,7 +186,6 @@ io.on('connection', (socket) => {
 
                 page = await browser.newPage();
                 
-                // Live Stream for Web
                 const client = await page.target().createCDPSession();
                 await client.send('Page.startScreencast', { format: 'jpeg', quality: 20 });
                 client.on('Page.screencastFrame', async (frame) => {
@@ -233,7 +219,7 @@ io.on('connection', (socket) => {
                 };
 
                 await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-                await sendTelegramScreenshot(page, `Bypassing Initial Ad for UID: ${targetUid}`); // Telegram screenshot
+                await sendTelegramScreenshot(page, `Bypassing Initial Ad for UID: ${targetUid}`); 
                 
                 await smartClick('without Discord', 'Bypass Initial Discord');
                 
@@ -258,7 +244,6 @@ io.on('connection', (socket) => {
 
                     await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 2nd Click`);
                     
-                    // Screenshot to telegram on every step
                     await sendTelegramScreenshot(page, `Completed Step ${i}/5 for UID: ${targetUid}`);
                     await new Promise(r => setTimeout(r, 2000)); 
                 }
