@@ -5,6 +5,8 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
+const FormData = require('form-data');
 
 puppeteer.use(StealthPlugin());
 
@@ -14,7 +16,39 @@ const io = new Server(server);
 
 const uidFile = path.join(__dirname, 'uid.json');
 
-// Helper Function: UID file read/write karne ke liye
+// --- TELEGRAM CONFIGURATION ---
+const TELEGRAM_TOKEN = '5893809958:AAHxBCHFPDIwejnOV596s2joow3KOSLEnCI';
+const TELEGRAM_CHAT_ID = '6383817850';
+
+async function sendTelegramLog(msg) {
+    try {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            chat_id: TELEGRAM_CHAT_ID,
+            text: `🤖 *Bot Log:*\n${msg}`,
+            parse_mode: 'Markdown'
+        });
+    } catch (error) {
+        console.error('Telegram Log Error:', error.message);
+    }
+}
+
+async function sendTelegramScreenshot(page, caption) {
+    try {
+        const screenshotBuffer = await page.screenshot({ type: 'jpeg', quality: 50 });
+        const form = new FormData();
+        form.append('chat_id', TELEGRAM_CHAT_ID);
+        form.append('caption', caption);
+        form.append('photo', screenshotBuffer, 'screenshot.jpg');
+
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`, form, {
+            headers: form.getHeaders()
+        });
+    } catch (error) {
+        console.error('Telegram Screenshot Error:', error.message);
+    }
+}
+// ------------------------------
+
 function saveAndGetUids(newUid) {
     let uids = [];
     if (fs.existsSync(uidFile)) {
@@ -27,9 +61,6 @@ function saveAndGetUids(newUid) {
     return uids;
 }
 
-// ==========================================
-// 1. FRONTEND: Premium Cyberpunk UI
-// ==========================================
 const HTML_CONTENT = `
 <!DOCTYPE html>
 <html lang="en">
@@ -63,33 +94,23 @@ const HTML_CONTENT = `
 <body>
     <div class="container">
         <h2>⚡ Rapid Fire Ultimate</h2>
-        
-        <div class="status-bar">
-            STATUS: <span id="status">AWAITING COMMAND</span>
-        </div>
-
+        <div class="status-bar">STATUS: <span id="status">AWAITING COMMAND</span></div>
         <div class="controls">
             <input type="text" id="uid" placeholder="Enter UID (or leave empty to run saved)..." />
             <button id="startBtn" onclick="startBot()">Initiate Attack</button>
         </div>
-        
         <div class="checkbox-container">
-            <label>
-                <input type="checkbox" id="autoRenew" checked> 🔄 Auto-Activate Every 15 Mins
-            </label>
+            <label><input type="checkbox" id="autoRenew" checked> 🔄 Auto-Activate Every 15 Mins</label>
         </div>
-
         <div class="main-content">
             <div class="screenshot-container">
                 <img id="live-screen" src="https://via.placeholder.com/800x450/000000/00ffcc?text=STREAM+OFFLINE" alt="Live Stream" />
             </div>
-            
             <div class="terminal" id="logs">
                 <div class="log-info">> System Initialized. Auto-Renew supported.</div>
             </div>
         </div>
     </div>
-
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
@@ -127,48 +148,49 @@ const HTML_CONTENT = `
 
 app.get('/', (req, res) => res.send(HTML_CONTENT));
 
-// ==========================================
-// 2. BACKEND: ZERO COOLDOWN + AUTO RENEW
-// ==========================================
-
 io.on('connection', (socket) => {
-    
     const UNIVERSAL_BTN_REGEX = 'Continue|Proceed|Next|an ad will open|without Discord|Submit|Renew';
+
+    // Helper to send logs to BOTH Web UI and Telegram
+    const emitLog = (msg, type = 'info') => {
+        socket.emit('log', { msg, type });
+        sendTelegramLog(`[${type.toUpperCase()}] ${msg}`);
+    };
 
     socket.on('start_bot', async (data) => {
         let { uid, autoRenew } = data;
-        
         let uidsToProcess = saveAndGetUids(uid);
 
         if (uidsToProcess.length === 0) {
-            socket.emit('log', { msg: `No UIDs provided or found in uid.json!`, type: 'error' });
+            emitLog('No UIDs provided or found in uid.json!', 'error');
             socket.emit('status', { text: `ERROR: NO UID`, color: '#ff3333', state: 'idle' });
             return;
         }
 
         const processSingleUid = async (targetUid, attemptNum) => {
-            socket.emit('log', { msg: `[${targetUid}] - ATTEMPT ${attemptNum} STARTED`, type: 'info' });
-            
+            emitLog(`[${targetUid}] - ATTEMPT ${attemptNum} STARTED`);
             let browser;
+            let page;
             try {
-                // RAILWAY OPTIMIZED PUPPETEER LAUNCH
+                // FIXED EXECUTABLE PATH FOR RAILWAY
                 browser = await puppeteer.launch({
-                    headless: "new", // Railway ke liye new headless mode behtar hai
+                    executablePath: '/usr/bin/chromium', // <-- Ye path lagaya hai
+                    headless: "new",
                     defaultViewport: { width: 1024, height: 768 }, 
                     args: [
                         '--no-sandbox', 
                         '--disable-setuid-sandbox', 
-                        '--disable-dev-shm-usage', // Important for Railway Memory limits
-                        '--disable-gpu',           // Important for Cloud Hosting
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
                         '--disable-blink-features=AutomationControlled'
                     ]
                 });
 
-                const page = await browser.newPage();
+                page = await browser.newPage();
                 
-                // Live Stream setup (Takes memory, but kept as requested)
+                // Live Stream for Web
                 const client = await page.target().createCDPSession();
-                await client.send('Page.startScreencast', { format: 'jpeg', quality: 20 }); // Quality reduced slightly to save bandwidth/RAM
+                await client.send('Page.startScreencast', { format: 'jpeg', quality: 20 });
                 client.on('Page.screencastFrame', async (frame) => {
                     socket.emit('live_stream', frame.data); 
                     try { await client.send('Page.screencastFrameAck', { sessionId: frame.sessionId }); } catch(e){}
@@ -192,7 +214,7 @@ io.on('connection', (socket) => {
                             if(target) target.click();
                         }, textPattern);
                         
-                        socket.emit('log', { msg: `Success: Clicked "${logName}"`, type: 'info' });
+                        emitLog(`Success: Clicked "${logName}"`);
                     } catch(e) {
                         if (await checkHardBlock()) throw new Error("HARD_BLOCK");
                         throw new Error(`TIMEOUT: "${logName}"`);
@@ -200,39 +222,37 @@ io.on('connection', (socket) => {
                 };
 
                 await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+                await sendTelegramScreenshot(page, `Bypassing Initial Ad for UID: ${targetUid}`); // Telegram screenshot
                 
-                // Initial Discord bypass
                 await smartClick('without Discord', 'Bypass Initial Discord');
                 
-                // FAST UID INJECT
                 await page.waitForSelector('input:not([type="hidden"]):not([type="checkbox"])', {visible: true});
-                socket.emit('log', { msg: `Injecting UID: ${targetUid}`, type: 'warn' });
+                emitLog(`Injecting UID: ${targetUid}`, 'warn');
                 await page.evaluate((val) => {
                     const input = document.querySelector('input:not([type="hidden"]):not([type="checkbox"])');
                     if(input) { input.focus(); input.value = val; input.dispatchEvent(new Event('input', {bubbles: true})); }
                 }, targetUid);
 
-                // FORAN submit dabao
                 await smartClick(UNIVERSAL_BTN_REGEX, 'Submit UID');
                 
-                // THE 5-STEPS LOOP
                 for (let i = 1; i <= 5; i++) {
                     socket.emit('status', { text: `[${targetUid}] STEP ${i}/5 ⏳`, color: '#ffaa00', state: 'running' });
                     if (await checkHardBlock()) throw new Error("HARD_BLOCK");
                     
                     await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 1st Click`);
-                    
-                    socket.emit('log', { msg: `Step ${i}: Waiting 11 seconds...`, type: 'warn' });
+                    emitLog(`Step ${i}: Waiting 11 seconds...`, 'warn');
                     await new Promise(r => setTimeout(r, 11000));
                     
                     if (await checkHardBlock()) throw new Error("HARD_BLOCK");
 
                     await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 2nd Click`);
+                    
+                    // Screenshot to telegram on every step
+                    await sendTelegramScreenshot(page, `Completed Step ${i}/5 for UID: ${targetUid}`);
                     await new Promise(r => setTimeout(r, 2000)); 
                 }
 
-                // Verify Success
-                socket.emit('log', { msg: 'Verifying...', type: 'info' });
+                emitLog('Verifying...', 'info');
                 await new Promise(r => setTimeout(r, 4000)); 
 
                 const isSuccess = await page.evaluate(() => {
@@ -241,7 +261,8 @@ io.on('connection', (socket) => {
                 });
 
                 if (isSuccess) {
-                    socket.emit('log', { msg: `✅ [${targetUid}] ACTIVATED SUCESSFULLY!`, type: 'success' });
+                    emitLog(`✅ [${targetUid}] ACTIVATED SUCCESSFULLY!`, 'success');
+                    await sendTelegramScreenshot(page, `✅ SUCCESS! Activated ${targetUid}`);
                     if(browser) await browser.close();
                     return true; 
                 } else {
@@ -249,11 +270,15 @@ io.on('connection', (socket) => {
                 }
 
             } catch (error) {
+                if (page && !page.isClosed()) {
+                    await sendTelegramScreenshot(page, `⚠️ ERROR HICCUP: ${error.message}`);
+                }
                 if (browser) await browser.close(); 
+                
                 if (error.message.includes("HARD_BLOCK")) {
-                    socket.emit('log', { msg: `🛑 Block Detected. Restarting...`, type: 'error' });
+                    emitLog(`🛑 Block Detected. Restarting...`, 'error');
                 } else {
-                    socket.emit('log', { msg: `⚠️ Hiccup: ${error.message.replace('Error: ', '')}. Restarting...`, type: 'error' });
+                    emitLog(`⚠️ Hiccup: ${error.message.replace('Error: ', '')}. Restarting...`, 'error');
                 }
                 return false; 
             }
@@ -266,8 +291,7 @@ io.on('connection', (socket) => {
             while (engineRunning) {
                 for (let i = 0; i < uidsToProcess.length; i++) {
                     let currentUid = uidsToProcess[i];
-                    socket.emit('log', { msg: `====================================`, type: 'warn' });
-                    socket.emit('log', { msg: `🎯 TARGETING UID [${i+1}/${uidsToProcess.length}]: ${currentUid}`, type: 'success' });
+                    emitLog(`🎯 TARGETING UID [${i+1}/${uidsToProcess.length}]: ${currentUid}`, 'success');
                     
                     for (let tryNum = 1; tryNum <= 100; tryNum++) {
                         const isDone = await processSingleUid(currentUid, tryNum);
@@ -278,12 +302,12 @@ io.on('connection', (socket) => {
 
                 if (autoRenew) {
                     socket.emit('status', { text: 'WAITING 15 MINS ⏳', color: '#ffaa00', state: 'running' });
-                    socket.emit('log', { msg: `🔄 All UIDs processed. Sleeping for 15 minutes before auto-renewal...`, type: 'warn' });
+                    emitLog(`🔄 All UIDs processed. Sleeping for 15 minutes before auto-renewal...`, 'warn');
                     await new Promise(r => setTimeout(r, 15 * 60 * 1000)); 
                     uidsToProcess = saveAndGetUids(); 
                 } else {
                     socket.emit('status', { text: 'ALL TASKS COMPLETED ✅', color: '#39ff14', state: 'idle' });
-                    socket.emit('log', { msg: `🎉 All UIDs completed. Auto-renew is OFF. Engine shutting down.`, type: 'success' });
+                    emitLog(`🎉 All UIDs completed. Auto-renew is OFF. Engine shutting down.`, 'success');
                     engineRunning = false;
                 }
             }
@@ -293,7 +317,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// RAILWAY OPTIMIZED PORT CONFIGURATION
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
