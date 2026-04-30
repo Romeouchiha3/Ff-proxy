@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
+const { execSync } = require('child_process'); // ✨ Auto-path detect karne ke liye
 
 puppeteer.use(StealthPlugin());
 
@@ -172,9 +173,18 @@ io.on('connection', (socket) => {
             let browser;
             let page;
             try {
-                // FIXED EXECUTABLE PATH FOR RAILWAY
+                // ✨ DYNAMIC PATH LOGIC (Railway Nixpacks Fix) ✨
+                let chromiumPath = '/usr/bin/chromium';
+                try {
+                    // System se asli path khud dhoondega
+                    chromiumPath = execSync('which chromium').toString().trim();
+                    emitLog(`Chromium found at: ${chromiumPath}`, 'info');
+                } catch (err) {
+                    emitLog(`which command failed, trying default path.`, 'warn');
+                }
+
                 browser = await puppeteer.launch({
-                    executablePath: '/usr/bin/chromium', // <-- Ye path lagaya hai
+                    executablePath: chromiumPath,
                     headless: "new",
                     defaultViewport: { width: 1024, height: 768 }, 
                     args: [
@@ -182,6 +192,7 @@ io.on('connection', (socket) => {
                         '--disable-setuid-sandbox', 
                         '--disable-dev-shm-usage',
                         '--disable-gpu',
+                        '--no-zygote',
                         '--disable-blink-features=AutomationControlled'
                     ]
                 });
