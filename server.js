@@ -3,329 +3,327 @@ const http = require('http');
 const { Server } = require('socket.io');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const FormData = require('form-data');
+const { createClient } = require('@supabase/supabase-js');
+const cookieParser = require('cookie-parser');
 
 puppeteer.use(StealthPlugin());
+
+// ==========================================
+// CONFIGURATIONS & INTEGRATIONS
+// ==========================================
+const SUPABASE_URL = 'https://nebwfonyhfgxnfkiisvs.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5lYndmb255aGZneG5ma2lpc3ZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzNjc0MjMsImV4cCI6MjA5MDk0MzQyM30.me-P_mhC3droVGrHSlD_G3h9-ZgGgR3hy8VyDLFTp58';
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const TG_BOT_TOKEN = '5893809958:AAHxBCHFPDIwejnOV596s2joow3KOSLEnCI';
+let globalAdminChatId = null; // Save chat ID for cron notifications
+
+// OTP Memory Storage
+const pendingOTPs = {}; 
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const uidFile = path.join(__dirname, 'uid.json');
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-// --- TELEGRAM CONFIGURATION ---
-const TELEGRAM_TOKEN = '5893809958:AAHxBCHFPDIwejnOV596s2joow3KOSLEnCI';
-const TELEGRAM_CHAT_ID = '6383817850';
+// Anti-Crash
+process.on('uncaughtException', (err) => console.log(`[Shield] ${err.message}`));
+process.on('unhandledRejection', () => console.log(`[Shield] Rejection Prevented.`));
 
-async function sendTelegramLog(msg) {
+// ==========================================
+// TELEGRAM BOT HELPERS
+// ==========================================
+async function sendTgMessage(chatId, text) {
     try {
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-            chat_id: TELEGRAM_CHAT_ID,
-            text: `🤖 *Bot Log:*\n${msg}`,
-            parse_mode: 'Markdown'
+        const url = `https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`;
+        await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'HTML' })
         });
-    } catch (error) {
-        console.error('Telegram Log Error:', error.message);
-    }
+    } catch(e) { console.log("TG Error:", e.message); }
 }
 
-async function sendTelegramScreenshot(page, caption) {
-    try {
-        if (!page || page.isClosed()) return;
-        const screenshotBuffer = await page.screenshot({ type: 'jpeg', quality: 50 });
-        const form = new FormData();
-        form.append('chat_id', TELEGRAM_CHAT_ID);
-        form.append('caption', caption);
-        form.append('photo', screenshotBuffer, 'screenshot.jpg');
+// ==========================================
+// AUTH & ROUTING
+// ==========================================
+const ADMIN_ROUTE = '/lg/rg/admin/proxy';
 
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`, form, {
-            headers: form.getHeaders()
-        });
-    } catch (error) {
-        console.error('Telegram Screenshot Error:', error.message);
-    }
+// Middleware to check auth
+function checkAuth(req, res, next) {
+    if (req.cookies.romeo_auth === 'authenticated') return next();
+    res.redirect(ADMIN_ROUTE + '/login');
 }
 
-function saveAndGetUids(newUid) {
-    let uids = [];
-    if (fs.existsSync(uidFile)) {
-        uids = JSON.parse(fs.readFileSync(uidFile));
-    }
-    if (newUid && !uids.includes(newUid)) {
-        uids.push(newUid);
-        fs.writeFileSync(uidFile, JSON.stringify(uids, null, 2));
-    }
-    return uids;
-}
-
-const HTML_CONTENT = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rapid Fire Bot - Ultimate</title>
+// ==========================================
+// HTML TEMPLATES (ROMEO KING AURORA THEME)
+// ==========================================
+const auroraStyles = `
     <style>
-        :root { --bg-color: #050505; --panel-bg: #111111; --primary: #00ffcc; --secondary: #ff007f; --error: #ff3333; --success: #39ff14; --text-main: #e0e0e0; --border-glow: 0 0 10px rgba(0, 255, 204, 0.2); }
-        body { background-color: var(--bg-color); color: var(--text-main); font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px 10px; margin: 0; }
-        .container { background-color: var(--panel-bg); padding: 20px; border-radius: 16px; width: 95%; max-width: 900px; box-shadow: var(--border-glow); border: 1px solid rgba(0, 255, 204, 0.3); }
-        h2 { text-align: center; color: var(--primary); margin-bottom: 10px; font-size: 26px; text-transform: uppercase; letter-spacing: 2px; }
-        .status-bar { text-align: center; margin-bottom: 15px; font-weight: bold; padding: 12px; border-radius: 8px; background-color: #000; border: 1px solid var(--primary); font-size: 18px; letter-spacing: 1px;}
-        #status { color: var(--primary); }
-        .controls { display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap;}
-        input[type="text"] { flex-grow: 1; padding: 15px; border: 1px solid rgba(0, 255, 204, 0.5); border-radius: 8px; background: #000; color: var(--primary); font-size: 16px; min-width: 200px; outline: none; transition: 0.3s; font-family: monospace;}
-        input[type="text"]:focus { border-color: var(--primary); box-shadow: 0 0 10px rgba(0, 255, 204, 0.3); }
-        button { padding: 15px 30px; background: linear-gradient(45deg, #00ffcc, #00b3ff); color: #000; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 900; text-transform: uppercase; transition: 0.3s; }
-        button:hover { transform: translateY(-2px); box-shadow: 0 0 15px rgba(0, 255, 204, 0.6); }
-        button:disabled { background: #333; color: #666; cursor: not-allowed; transform: none; }
-        .checkbox-container { text-align: center; margin-bottom: 20px; font-size: 16px; font-weight: bold; color: var(--primary); }
-        .checkbox-container input { transform: scale(1.3); margin-right: 10px; cursor: pointer; }
-        .main-content { display: flex; gap: 20px; flex-direction: column; }
-        @media (min-width: 768px) { .main-content { flex-direction: row; } }
-        .screenshot-container { flex: 1.2; border: 1px solid rgba(255, 0, 127, 0.4); border-radius: 12px; overflow: hidden; background-color: #000; position: relative; display: flex; justify-content: center; align-items: center; min-height: 250px;}
-        .terminal { flex: 1; background-color: #000; color: #a9b7c6; padding: 20px; border-radius: 12px; height: 350px; overflow-y: auto; border: 1px solid #333; font-size: 14px; line-height: 1.6; font-family: 'Courier New', monospace; box-shadow: inset 0 0 10px rgba(0,0,0,0.8);}
-        .log-info { color: #00b3ff; } .log-success { color: var(--success); font-weight: bold; } .log-error { color: var(--error); font-weight: bold; } .log-warn { color: #ffaa00; } .log-time { color: #666; font-size: 12px; margin-right: 8px;}
-        #static-img { width: 100%; object-fit: contain; border-radius: 12px; opacity: 0.5; }
+        :root { --bg: #030005; --panel: #0a0510; --primary: #00ffcc; --secondary: #ff007f; --aurora: #8a2be2; --text: #e0e0e0; }
+        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; min-height: 100vh; position: relative; overflow-x: hidden; }
+        body::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(138,43,226,0.15) 0%, rgba(0,0,0,0) 50%), radial-gradient(circle at 80% 20%, rgba(0,255,204,0.1) 0%, rgba(0,0,0,0) 40%); z-index: -1; animation: aurora 10s infinite alternate; }
+        @keyframes aurora { 0% { transform: rotate(0deg); } 100% { transform: rotate(5deg); } }
+        
+        .container { background: rgba(10, 5, 16, 0.85); backdrop-filter: blur(10px); padding: 30px; border-radius: 16px; width: 100%; max-width: 600px; box-shadow: 0 0 30px rgba(138, 43, 226, 0.3), inset 0 0 10px rgba(0, 255, 204, 0.1); border: 1px solid rgba(138, 43, 226, 0.5); }
+        .header-title { text-align: center; color: #fff; text-shadow: 0 0 15px var(--primary), 0 0 30px var(--aurora); margin-bottom: 30px; letter-spacing: 3px; font-weight: 900; font-size: 28px;}
+        .crown { color: #ffd700; font-size: 32px; text-shadow: 0 0 20px #ffd700; }
+        
+        input { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid rgba(0, 255, 204, 0.4); background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; outline: none; box-sizing: border-box; margin-bottom: 15px; box-shadow: inset 0 0 10px rgba(0,0,0,0.8); transition: 0.3s;}
+        input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 255, 204, 0.3), inset 0 0 10px rgba(0,0,0,0.8); }
+        
+        button { width: 100%; padding: 15px; background: linear-gradient(45deg, var(--aurora), var(--secondary)); color: #fff; border: none; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: bold; text-transform: uppercase; box-shadow: 0 0 15px rgba(255, 0, 127, 0.4); transition: 0.3s; margin-bottom: 15px;}
+        button:hover { transform: translateY(-2px); box-shadow: 0 0 25px rgba(255, 0, 127, 0.6); }
+        
+        .user-card { background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,204,0.3); padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .del-btn { background: #ff3333; width: auto; padding: 8px 15px; margin: 0; box-shadow: 0 0 10px rgba(255,51,51,0.4); }
+        .logs-box { background: #000; border: 1px solid #333; border-radius: 10px; height: 200px; overflow-y: auto; padding: 10px; font-family: monospace; font-size: 12px; color: #a9b7c6; }
     </style>
-</head>
-<body>
-    <div class="container">
-        <h2>⚡ Rapid Fire Ultimate</h2>
-        <div class="status-bar">STATUS: <span id="status">AWAITING COMMAND</span></div>
-        <div class="controls">
-            <input type="text" id="uid" placeholder="Enter UID (or leave empty to run saved)..." />
-            <button id="startBtn" onclick="startBot()">Initiate Attack</button>
-        </div>
-        <div class="checkbox-container">
-            <label><input type="checkbox" id="autoRenew" checked> 🔄 Auto-Activate Every 15 Mins</label>
-        </div>
-        <div class="main-content">
-            <div class="screenshot-container">
-                <img id="static-img" src="https://via.placeholder.com/800x450/000000/00ffcc?text=LIVE+STREAM+DISABLED+FOR+SPEED" alt="Disabled Stream" />
-            </div>
-            <div class="terminal" id="logs">
-                <div class="log-info">> System Initialized. Auto-Renew supported.</div>
-            </div>
-        </div>
-    </div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        const logsDiv = document.getElementById('logs');
-        const statusDiv = document.getElementById('status');
-        const startBtn = document.getElementById('startBtn');
-
-        function addLog(msg, type = 'info') {
-            const div = document.createElement('div');
-            const time = new Date().toLocaleTimeString('en-US', { hour12: false });
-            div.innerHTML = \`<span class="log-time">[\${time}]</span> <span class="log-\${type}">> \${msg}</span>\`;
-            logsDiv.appendChild(div);
-            logsDiv.scrollTop = logsDiv.scrollHeight; 
-        }
-
-        socket.on('log', (data) => addLog(data.msg, data.type));
-        socket.on('status', (data) => {
-            statusDiv.textContent = data.text;
-            statusDiv.style.color = data.color;
-            startBtn.disabled = data.state === 'running';
-        });
-
-        function startBot() {
-            const uid = document.getElementById('uid').value.trim();
-            const autoRenew = document.getElementById('autoRenew').checked;
-            socket.emit('start_bot', { uid: uid, autoRenew: autoRenew });
-            logsDiv.innerHTML = ''; 
-            addLog("Executing aggressive protocol...", "warn");
-        }
-    </script>
-</body>
-</html>
 `;
 
-app.get('/', (req, res) => res.send(HTML_CONTENT));
-
-io.on('connection', (socket) => {
-    const UNIVERSAL_BTN_REGEX = 'Continue|Proceed|Next|an ad will open|without Discord|Submit|Renew';
-
-    const emitLog = (msg, type = 'info') => {
-        socket.emit('log', { msg, type });
-        sendTelegramLog(`[${type.toUpperCase()}] ${msg}`);
-    };
-
-    socket.on('start_bot', async (data) => {
-        let { uid, autoRenew } = data;
-        let uidsToProcess = saveAndGetUids(uid);
-
-        if (uidsToProcess.length === 0) {
-            emitLog('No UIDs provided or found in uid.json!', 'error');
-            socket.emit('status', { text: `ERROR: NO UID`, color: '#ff3333', state: 'idle' });
-            return;
-        }
-
-        const processSingleUid = async (targetUid, attemptNum) => {
-            emitLog(`[${targetUid}] - ATTEMPT ${attemptNum} STARTED`);
-            let browser;
-            let page;
-            try {
-                browser = await puppeteer.launch({
-                    headless: "new",
-                    defaultViewport: { width: 1024, height: 768 }, 
-                    args: [
-                        '--no-sandbox', 
-                        '--disable-setuid-sandbox', 
-                        '--disable-dev-shm-usage',
-                        '--disable-gpu',
-                        '--no-zygote',
-                        '--disable-blink-features=AutomationControlled'
-                    ]
-                });
-
-                page = await browser.newPage();
-                
-                // Memory Optimization: Block fonts and media to speed up load, but keep images for screenshots
-                await page.setRequestInterception(true);
-                page.on('request', (req) => {
-                    if (['font', 'media'].includes(req.resourceType())) {
-                        req.abort();
-                    } else {
-                        req.continue();
-                    }
-                });
-
-                const checkHardBlock = async () => {
-                    return await page.evaluate(() => document.body.innerText.toLowerCase().includes('something went wrong'));
-                };
-
-                const smartClick = async (textPattern, logName) => {
-                    if (await checkHardBlock()) throw new Error("HARD_BLOCK");
-                    try {
-                        // Timeout barha kar 60 seconds kar diya hai Railway ke liye
-                        await page.waitForFunction((pattern) => {
-                            const elements = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
-                            return elements.find(el => el.innerText && el.innerText.match(new RegExp(pattern, 'i')) && el.offsetHeight > 0);
-                        }, { timeout: 60000 }, textPattern);
-
-                        await page.evaluate((pattern) => {
-                            const elements = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
-                            const target = elements.find(el => el.innerText && el.innerText.match(new RegExp(pattern, 'i')) && el.offsetHeight > 0);
-                            if(target) target.click();
-                        }, textPattern);
-                        
-                        emitLog(`Success: Clicked "${logName}"`);
-                    } catch(e) {
-                        if (await checkHardBlock()) throw new Error("HARD_BLOCK");
-                        throw new Error(`TIMEOUT: "${logName}"`);
-                    }
-                };
-
-                await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-                await sendTelegramScreenshot(page, `🌐 [${targetUid}] Website Loaded`); 
-                
-                await smartClick('without Discord', 'Bypass Initial Discord');
-                await sendTelegramScreenshot(page, `🔓 [${targetUid}] Bypassed Initial Discord`); 
-                
-                await page.waitForSelector('input:not([type="hidden"]):not([type="checkbox"])', {visible: true});
-                emitLog(`Injecting UID: ${targetUid}`, 'warn');
-                await page.evaluate((val) => {
-                    const input = document.querySelector('input:not([type="hidden"]):not([type="checkbox"])');
-                    if(input) { input.focus(); input.value = val; input.dispatchEvent(new Event('input', {bubbles: true})); }
-                }, targetUid);
-                await sendTelegramScreenshot(page, `💉 [${targetUid}] UID Injected in Field`); 
-
-                await smartClick(UNIVERSAL_BTN_REGEX, 'Submit UID');
-                await sendTelegramScreenshot(page, `🚀 [${targetUid}] Submitted UID`); 
-                
-                for (let i = 1; i <= 5; i++) {
-                    socket.emit('status', { text: `[${targetUid}] STEP ${i}/5 ⏳`, color: '#ffaa00', state: 'running' });
-                    if (await checkHardBlock()) throw new Error("HARD_BLOCK");
-                    
-                    await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 1st Click`);
-                    await sendTelegramScreenshot(page, `🖱️ [${targetUid}] Step ${i} - First Click Done`);
-                    
-                    emitLog(`Step ${i}: Waiting 11 seconds...`, 'warn');
-                    await new Promise(r => setTimeout(r, 11000));
-                    
-                    if (await checkHardBlock()) throw new Error("HARD_BLOCK");
-
-                    await smartClick(UNIVERSAL_BTN_REGEX, `Step ${i} - 2nd Click`);
-                    await sendTelegramScreenshot(page, `🖱️ [${targetUid}] Step ${i} - Second Click Done`);
-                    
-                    await new Promise(r => setTimeout(r, 2000)); 
+// LOGIN PAGE
+app.get(ADMIN_ROUTE + '/login', (req, res) => {
+    res.send(`
+        <html><head><title>ROMEO KING Auth</title>${auroraStyles}</head><body>
+            <div class="container">
+                <div class="header-title"><span class="crown">👑</span><br>ROMEO KING</div>
+                <div id="step1">
+                    <input type="text" id="chatId" placeholder="Enter Telegram Chat ID" />
+                    <button onclick="sendOtp()">Send OTP</button>
+                </div>
+                <div id="step2" style="display:none;">
+                    <input type="text" id="otp" placeholder="Enter 4-Digit OTP" />
+                    <button onclick="verifyOtp()">Login</button>
+                </div>
+            </div>
+            <script>
+                async function sendOtp() {
+                    const chatId = document.getElementById('chatId').value;
+                    const res = await fetch('${ADMIN_ROUTE}/send-otp', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({chatId}) });
+                    const data = await res.json();
+                    if(data.success) { document.getElementById('step1').style.display = 'none'; document.getElementById('step2').style.display = 'block'; alert('OTP Sent to Telegram!'); }
+                    else alert('Failed to send OTP');
                 }
-
-                emitLog('Verifying...', 'info');
-                await sendTelegramScreenshot(page, `🔍 [${targetUid}] Verifying Success...`);
-                await new Promise(r => setTimeout(r, 4000)); 
-
-                const isSuccess = await page.evaluate(() => {
-                    const t = document.body.innerText.toLowerCase();
-                    return t.includes('success') || t.includes('granted') || t.includes('active') || t.includes('expire');
-                });
-
-                if (isSuccess) {
-                    emitLog(`✅ [${targetUid}] ACTIVATED SUCCESSFULLY!`, 'success');
-                    await sendTelegramScreenshot(page, `✅ SUCCESS! Activated ${targetUid}`);
-                    if(browser) await browser.close();
-                    return true; 
-                } else {
-                    throw new Error("Verification Failed");
+                async function verifyOtp() {
+                    const chatId = document.getElementById('chatId').value;
+                    const otp = document.getElementById('otp').value;
+                    const res = await fetch('${ADMIN_ROUTE}/verify-otp', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({chatId, otp}) });
+                    if(res.ok) window.location.href = '${ADMIN_ROUTE}';
+                    else alert('Invalid OTP!');
                 }
-
-            } catch (error) {
-                if (page && !page.isClosed()) {
-                    await sendTelegramScreenshot(page, `⚠️ ERROR HICCUP: ${error.message}`);
-                }
-                if (browser) await browser.close(); 
-                
-                if (error.message.includes("HARD_BLOCK")) {
-                    emitLog(`🛑 Block Detected. Restarting...`, 'error');
-                } else {
-                    emitLog(`⚠️ Hiccup: ${error.message.replace('Error: ', '')}. Restarting...`, 'error');
-                }
-                return false; 
-            }
-        };
-
-        socket.emit('status', { text: `STARTING ENGINE...`, color: '#00ffcc', state: 'running' });
-        let engineRunning = true;
-        
-        const runScheduler = async () => {
-            while (engineRunning) {
-                for (let i = 0; i < uidsToProcess.length; i++) {
-                    let currentUid = uidsToProcess[i];
-                    emitLog(`🎯 TARGETING UID [${i+1}/${uidsToProcess.length}]: ${currentUid}`, 'success');
-                    
-                    for (let tryNum = 1; tryNum <= 100; tryNum++) {
-                        const isDone = await processSingleUid(currentUid, tryNum);
-                        if (isDone) break;
-                        await new Promise(r => setTimeout(r, 1000)); 
-                    }
-                }
-
-                if (autoRenew) {
-                    socket.emit('status', { text: 'WAITING 15 MINS ⏳', color: '#ffaa00', state: 'running' });
-                    emitLog(`🔄 All UIDs processed. Sleeping for 15 minutes before auto-renewal...`, 'warn');
-                    await new Promise(r => setTimeout(r, 15 * 60 * 1000)); 
-                    uidsToProcess = saveAndGetUids(); 
-                } else {
-                    socket.emit('status', { text: 'ALL TASKS COMPLETED ✅', color: '#39ff14', state: 'idle' });
-                    emitLog(`🎉 All UIDs completed. Auto-renew is OFF. Engine shutting down.`, 'success');
-                    engineRunning = false;
-                }
-            }
-        };
-
-        runScheduler();
-    });
+            </script>
+        </body></html>
+    `);
 });
 
+// AUTH APIs
+app.post(ADMIN_ROUTE + '/send-otp', async (req, res) => {
+    const { chatId } = req.body;
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    pendingOTPs[chatId] = otp;
+    await sendTgMessage(chatId, `👑 <b>ROMEO KING SYSTEM</b>\n\nYour Admin Login OTP is: <b>${otp}</b>`);
+    res.json({ success: true });
+});
+
+app.post(ADMIN_ROUTE + '/verify-otp', (req, res) => {
+    const { chatId, otp } = req.body;
+    if (pendingOTPs[chatId] && pendingOTPs[chatId] === otp) {
+        delete pendingOTPs[chatId];
+        globalAdminChatId = chatId; // Set for cron
+        res.cookie('romeo_auth', 'authenticated', { maxAge: 24*60*60*1000 });
+        res.json({ success: true });
+    } else {
+        res.status(401).json({ success: false });
+    }
+});
+
+// DASHBOARD
+app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
+    // Note: User must create table 'targets' with columns 'id', 'uid', 'name' in Supabase
+    const { data: users } = await supabase.from('targets').select('*');
+    
+    let usersHtml = '';
+    if (users) {
+        users.forEach(u => {
+            usersHtml += `<div class="user-card">
+                <div><b>${u.name}</b> <br> <span style="color:#00ffcc; font-size:12px;">UID: ${u.uid}</span></div>
+                <button class="del-btn" onclick="delUser('${u.id}')">Delete</button>
+            </div>`;
+        });
+    }
+
+    res.send(`
+        <html><head><title>Admin Panel</title>${auroraStyles}</head><body>
+            <div class="container">
+                <div class="header-title"><span class="crown">👑</span><br>ROMEO KING PANEL</div>
+                
+                <h3 style="color:var(--primary);">Add Target</h3>
+                <input type="text" id="name" placeholder="User Name (e.g. Ali)" />
+                <input type="text" id="uid" placeholder="Target UID" />
+                <button onclick="addUser()">Register UID</button>
+
+                <h3 style="color:var(--secondary); margin-top:20px;">Active Targets (15m Auto-Cycle)</h3>
+                <div style="max-height: 250px; overflow-y:auto; margin-bottom:20px;">${usersHtml}</div>
+
+                <h3 style="color:#fff;">Cron Live Logs</h3>
+                <div class="logs-box" id="logs">Waiting for next cycle...</div>
+            </div>
+            <script src="/socket.io/socket.io.js"></script>
+            <script>
+                const socket = io();
+                socket.on('cron_log', msg => {
+                    const l = document.getElementById('logs');
+                    l.innerHTML += '<div>[' + new Date().toLocaleTimeString() + '] ' + msg + '</div>';
+                    l.scrollTop = l.scrollHeight;
+                });
+
+                async function addUser() {
+                    const name = document.getElementById('name').value;
+                    const uid = document.getElementById('uid').value;
+                    await fetch('${ADMIN_ROUTE}/add', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, uid}) });
+                    location.reload();
+                }
+                async function delUser(id) {
+                    await fetch('${ADMIN_ROUTE}/del', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id}) });
+                    location.reload();
+                }
+            </script>
+        </body></html>
+    `);
+});
+
+app.post(ADMIN_ROUTE + '/add', checkAuth, async (req, res) => {
+    await supabase.from('targets').insert([{ name: req.body.name, uid: req.body.uid }]);
+    res.json({ success: true });
+});
+app.post(ADMIN_ROUTE + '/del', checkAuth, async (req, res) => {
+    await supabase.from('targets').delete().eq('id', req.body.id);
+    res.json({ success: true });
+});
+
+// ==========================================
+// AUTO-PILOT CHROMIUM CORE (THE GHOST)
+// ==========================================
+async function runGhostActivator(uid, name) {
+    let browser;
+    try {
+        io.emit('cron_log', `Starting Ghost Engine for ${name} [${uid}]...`);
+        
+        browser = await puppeteer.launch({
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
+            headless: 'new', // Best for Railway
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable' // Railway Docker path
+        });
+
+        const page = (await browser.pages())[0] || await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
+
+        page.on('dialog', async dialog => { await dialog.dismiss(); }); // Kill popups
+
+        await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+        let safetyCounter = 0;
+        let uidInjected = false;
+        
+        while (safetyCounter < 60) { // Limit loop
+            safetyCounter++;
+
+            const isSuccess = await page.evaluate(() => {
+                const text = document.body.innerText.toLowerCase();
+                if (text.includes('step ') && text.includes(' of ')) return false;
+                return text.includes('access granted') || text.includes('success') || text.includes('expires in');
+            });
+
+            if (isSuccess) {
+                const timeStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Karachi' });
+                const msg = `👑 <b>ROMEO KING SYSTEM</b>\n\n✅ <b>ACTIVATION SUCCESSFUL!</b>\n\n👤 <b>Name:</b> ${name}\n🆔 <b>UID:</b> <code>${uid}</code>\n⏰ <b>Time (PKT):</b> ${timeStr}\n\n<i>Auto-Cycle Status: Active</i>`;
+                if(globalAdminChatId) await sendTgMessage(globalAdminChatId, msg);
+                io.emit('cron_log', `<span style="color:#39ff14">Success: ${name} [${uid}] activated!</span>`);
+                return true;
+            }
+
+            if (!uidInjected) {
+                const injected = await page.evaluate((val) => {
+                    const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"])'));
+                    if (inputs.length > 0 && inputs[0].value !== val) {
+                        inputs[0].focus(); inputs[0].value = val;
+                        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+                        inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+                        return true;
+                    }
+                    return false;
+                }, uid);
+                if (injected) { uidInjected = true; await new Promise(r => setTimeout(r, 1000)); }
+            }
+
+            const clicked = await page.evaluate(() => {
+                const targets = ['continue without discord', 'continue (an ad will open)', 'continue', 'proceed', 'next', 'submit', 'renew'];
+                const buttons = Array.from(document.querySelectorAll('button, a, div[role="button"], span'));
+                for (let btn of buttons) {
+                    if (!btn.innerText) continue;
+                    const text = btn.innerText.toLowerCase().trim();
+                    if (btn.offsetHeight > 0 && window.getComputedStyle(btn).display !== 'none') {
+                        if (targets.some(t => text === t || text.includes(t))) {
+                            btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+                            if (typeof btn.click === 'function') btn.click();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            });
+
+            if (clicked) await new Promise(r => setTimeout(r, 2000));
+            else await new Promise(r => setTimeout(r, 1000));
+            
+            const isBlocked = await page.evaluate(() => document.body.innerText.toLowerCase().includes('invalid id'));
+            if(isBlocked) throw new Error("Invalid ID / Blocked");
+        }
+        throw new Error("Timeout");
+    } catch (error) {
+        io.emit('cron_log', `<span style="color:#ff3333">Error on ${name}: ${error.message}</span>`);
+        if(globalAdminChatId) await sendTgMessage(globalAdminChatId, `⚠️ <b>FAILED</b>\nName: ${name}\nUID: ${uid}\nError: ${error.message}`);
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+// ==========================================
+// CRON SCHEDULER (Runs every 15 mins)
+// ==========================================
+let isCronRunning = false;
+setInterval(async () => {
+    if (isCronRunning) return;
+    isCronRunning = true;
+    io.emit('cron_log', `--- Starting 15 Min Auto-Cycle ---`);
+    
+    try {
+        const { data: users } = await supabase.from('targets').select('*');
+        if (users && users.length > 0) {
+            for (let user of users) {
+                await runGhostActivator(user.uid, user.name);
+                // 10 second delay between each UID to avoid heavy CPU load
+                await new Promise(r => setTimeout(r, 10000)); 
+            }
+        } else {
+            io.emit('cron_log', `No active targets found in database.`);
+        }
+    } catch(e) {
+        console.log("Cron Error:", e);
+    }
+    
+    io.emit('cron_log', `--- Auto-Cycle Finished ---`);
+    isCronRunning = false;
+}, 15 * 60 * 1000); // 15 Minutes
+
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, () => {
     console.log(`\n=========================================`);
-    console.log(`⚡ RAPID FIRE ULTIMATE RUNNING!`);
-    console.log(`👉 Bound to Port: ${PORT}`);
+    console.log(`👑 ROMEO KING ADMIN SERVER RUNNING`);
+    console.log(`👉 ${ADMIN_ROUTE}/login`);
     console.log(`=========================================\n`);
 });
