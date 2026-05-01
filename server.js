@@ -16,9 +16,10 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const TG_BOT_TOKEN = '5893809958:AAHxBCHFPDIwejnOV596s2joow3KOSLEnCI';
+let globalAdminChatId = null; 
 
 const pendingOTPs = {}; 
-const activeTimers = {}; 
+const activeTimers = {}; // Individual UID timers store karne ke liye
 
 const app = express();
 const server = http.createServer(app);
@@ -32,36 +33,17 @@ process.on('uncaughtException', (err) => console.log(`[Shield] ${err.message}`))
 process.on('unhandledRejection', () => console.log(`[Shield] Rejection Prevented.`));
 
 // ==========================================
-// TELEGRAM BOT HELPER (TEXT & SCREENSHOT)
+// TELEGRAM BOT HELPERS
 // ==========================================
 async function sendTgMessage(chatId, text) {
     try {
-        await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+        const url = `https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`;
+        await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'HTML' })
         });
     } catch(e) { console.log("TG Error:", e.message); }
-}
-
-async function sendTgPhoto(chatId, text, imageBuffer) {
-    try {
-        const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
-        const payload = Buffer.concat([
-            Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`),
-            Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${text}\r\n`),
-            Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n`),
-            Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="success.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
-            imageBuffer,
-            Buffer.from(`\r\n--${boundary}--\r\n`)
-        ]);
-
-        await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendPhoto`, {
-            method: 'POST',
-            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-            body: payload
-        });
-    } catch(e) { console.log("TG Photo Error:", e.message); }
 }
 
 // ==========================================
@@ -147,9 +129,8 @@ app.post(ADMIN_ROUTE + '/verify-otp', (req, res) => {
     const { chatId, otp } = req.body;
     if (pendingOTPs[chatId] && pendingOTPs[chatId] === otp) {
         delete pendingOTPs[chatId];
-        // Save ChatID in cookies so we can use it to store in DB later
+        globalAdminChatId = chatId; 
         res.cookie('romeo_auth', 'authenticated', { maxAge: 24*60*60*1000 });
-        res.cookie('admin_chat_id', chatId, { maxAge: 24*60*60*1000 }); 
         res.json({ success: true });
     } else {
         res.status(401).json({ success: false });
@@ -176,9 +157,9 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
                 <h3 style="color:var(--primary);">Add Target</h3>
                 <input type="text" id="name" placeholder="User Name (e.g. Ali)" />
                 <input type="text" id="uid" placeholder="Target UID" />
-                <button onclick="addUser()">Register UID & Activate Now</button>
+                <button onclick="addUser()">Register UID</button>
 
-                <h3 style="color:var(--secondary); margin-top:20px;">Active Targets (30 Min Cycle)</h3>
+                <h3 style="color:var(--secondary); margin-top:20px;">Active Targets (40 Min Cycle)</h3>
                 <div style="max-height: 200px; overflow-y:auto; margin-bottom:20px;">${usersHtml}</div>
 
                 <h3 style="color:#fff;">Live Engine Operations & APIs</h3>
@@ -198,7 +179,7 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
                     const uid = document.getElementById('uid').value;
                     if(!name || !uid) return alert('Name aur UID zaroori hain!');
                     const btn = document.querySelector('button[onclick="addUser()"]');
-                    btn.innerText = 'Registering & Starting...'; btn.disabled = true;
+                    btn.innerText = 'Registering...'; btn.disabled = true;
                     await fetch('${ADMIN_ROUTE}/add', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, uid}) });
                     location.reload();
                 }
@@ -216,12 +197,10 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
 // ==========================================
 app.post(ADMIN_ROUTE + '/add', checkAuth, async (req, res) => {
     const { name, uid } = req.body;
-    const chat_id = req.cookies.admin_chat_id; // Retrieve saved Chat ID
-    
-    await supabase.from('targets').insert([{ name, uid, chat_id }]);
+    await supabase.from('targets').insert([{ name, uid }]);
     
     // START INDIVIDUAL CYCLE IMMEDIATELY
-    startUIDCycle(uid, name, chat_id);
+    startUIDCycle(uid, name);
     res.json({ success: true });
 });
 
@@ -233,54 +212,59 @@ app.post(ADMIN_ROUTE + '/del', checkAuth, async (req, res) => {
     if (activeTimers[uid]) {
         clearInterval(activeTimers[uid]);
         delete activeTimers[uid];
-        io.emit('cron_log', `🛑 Stopped 30-Min cycle for [${uid}]`);
+        io.emit('cron_log', `🛑 Stopped 40-Min cycle for [${uid}]`);
     }
     res.json({ success: true });
 });
 
 // ==========================================
-// 30 MINUTE INDIVIDUAL CYCLE LOGIC
+// 40 MINUTE INDIVIDUAL CYCLE LOGIC
 // ==========================================
-function startUIDCycle(uid, name, chatId) {
+function startUIDCycle(uid, name) {
     io.emit('cron_log', `<span style="color:var(--secondary)">>> Registering ${name} & Starting immediate activation!</span>`);
     
     // Pehli dafa foran chalay ga
-    runGhostActivator(uid, name, chatId).catch(e => console.log("Run error:", e));
+    runGhostActivator(uid, name).catch(e => console.log("Run error:", e));
 
-    // Uske baad har 30 minutes baad chalay ga
+    // Uske baad har 40 minutes baad chalay ga
     if (activeTimers[uid]) clearInterval(activeTimers[uid]);
     
     activeTimers[uid] = setInterval(() => {
-        io.emit('cron_log', `<span style="color:var(--secondary)">>> 30 Mins passed! Reactivating ${name}...</span>`);
-        runGhostActivator(uid, name, chatId).catch(e => console.log("Run error:", e));
-    }, 30 * 60 * 1000); // 30 Minutes
+        io.emit('cron_log', `<span style="color:var(--secondary)">>> 40 Mins passed! Reactivating ${name}...</span>`);
+        runGhostActivator(uid, name).catch(e => console.log("Run error:", e));
+    }, 40 * 60 * 1000); // 40 Minutes
 }
 
-// RESTORE TIMERS ON SERVER START (Agar Railway restart kare toh cycles dubara shuru ho jayen)
+// RESTORE TIMERS ON SERVER START (Agar app restart ho)
 setTimeout(async () => {
     try {
         const { data: users } = await supabase.from('targets').select('*');
         if (users && users.length > 0) {
             console.log(`Restoring cycles for ${users.length} targets...`);
             users.forEach((u, index) => {
+                // Har user 15 seconds ke gap se start hoga server bachaane ke liye
                 setTimeout(() => {
-                    startUIDCycle(u.uid, u.name, u.chat_id);
+                    startUIDCycle(u.uid, u.name);
                 }, index * 15000); 
             });
         }
     } catch(e) { console.log("Restore error:", e); }
 }, 5000);
 
+
 // ==========================================
 // AUTO-PILOT CHROMIUM CORE (THE GHOST)
 // ==========================================
-async function runGhostActivator(uid, name, chatId) {
+async function runGhostActivator(uid, name) {
     let browser;
-    let runLogs = []; 
+    let runLogs = []; // Stores logs to send to TG
 
     const sysLog = (msg, isApi = false) => {
+        // Dashboard Log
         const uiHtml = `<span class="log-name">[${name}]</span> ${isApi ? `<span class="log-api">${msg}</span>` : msg}`;
         io.emit('cron_log', uiHtml);
+        
+        // TG Log (Clean text)
         runLogs.push(isApi ? `📡 ${msg}` : `⚙️ ${msg}`);
     };
 
@@ -290,8 +274,7 @@ async function runGhostActivator(uid, name, chatId) {
         browser = await puppeteer.launch({
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
             headless: 'new',
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable',
-            defaultViewport: { width: 390, height: 844, isMobile: true, hasTouch: true }
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable' 
         });
 
         const page = (await browser.pages())[0] || await browser.newPage();
@@ -299,11 +282,12 @@ async function runGhostActivator(uid, name, chatId) {
 
         page.on('dialog', async dialog => { await dialog.dismiss(); }); 
 
+        // TRACK API HITS
         await page.setRequestInterception(true);
         page.on('request', request => {
             if (request.resourceType() === 'fetch' || request.resourceType() === 'xhr') {
                 const url = request.url();
-                if(url.includes('unlockffbeta.com') || url.includes('auqot.com')) { 
+                if(url.includes('unlockffbeta.com') || url.includes('auqot.com')) { // Filtering important APIs only
                     sysLog(`[${request.method()}] ${url.substring(0, 60)}...`, true);
                 }
             }
@@ -325,18 +309,15 @@ async function runGhostActivator(uid, name, chatId) {
             });
 
             if (isSuccess) {
-                sysLog(`<span style="color:#39ff14">Activation Successful! Taking Screenshot...</span>`);
+                sysLog(`<span style="color:#39ff14">Activation Successful!</span>`);
                 
-                // TAKE SCREENSHOT
-                const screenshotBuffer = await page.screenshot({ type: 'jpeg', quality: 70 });
-                
-                // SEND FULL LOG TO TG WITH SCREENSHOT
+                // SEND FULL LOG TO TG
                 const timeStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Karachi' });
-                const recentLogs = runLogs.slice(-12).join('\n'); 
+                const recentLogs = runLogs.slice(-12).join('\n'); // Bhejte waqt last 12 actions bhejein (limit bachane ke liye)
                 
                 const msg = `👑 <b>ROMEO KING SYSTEM</b>\n\n✅ <b>ACTIVATION SUCCESSFUL!</b>\n\n👤 <b>Name:</b> ${name}\n🆔 <b>UID:</b> <code>${uid}</code>\n⏰ <b>Time:</b> ${timeStr}\n\n<b>📝 EXECUTION LOGS:</b>\n<pre>${recentLogs}</pre>`;
                 
-                if(chatId) await sendTgPhoto(chatId, msg, screenshotBuffer);
+                if(globalAdminChatId) await sendTgMessage(globalAdminChatId, msg);
                 return true;
             }
 
@@ -367,12 +348,8 @@ async function runGhostActivator(uid, name, chatId) {
                     if (btn.offsetHeight > 0 && window.getComputedStyle(btn).display !== 'none') {
                         if (targets.some(t => text === t || text.includes(t))) {
                             btn.scrollIntoView({ behavior: 'instant', block: 'center' });
-                            
-                            const rect = btn.getBoundingClientRect();
-                            if (rect.width > 0 && rect.height > 0) {
-                                if (typeof btn.click === 'function') btn.click();
-                                return { text: text, x: rect.x + (rect.width/2), y: rect.y + (rect.height/2) };
-                            }
+                            if (typeof btn.click === 'function') btn.click();
+                            return text;
                         }
                     }
                 }
@@ -380,8 +357,7 @@ async function runGhostActivator(uid, name, chatId) {
             });
 
             if (clicked) {
-                sysLog(`Clicked: "${clicked.text}"`);
-                try { await page.touchscreen.tap(clicked.x, clicked.y); } catch(e) {}
+                sysLog(`Clicked: "${clicked}"`);
                 await new Promise(r => setTimeout(r, 2000));
             } else {
                 await new Promise(r => setTimeout(r, 1000));
@@ -394,17 +370,9 @@ async function runGhostActivator(uid, name, chatId) {
     } catch (error) {
         sysLog(`<span style="color:#ff3333">Error: ${error.message}</span>`);
         
-        // Take Error Screenshot
-        let screenshotBuffer = null;
-        try { if(browser) screenshotBuffer = await (await browser.pages())[0].screenshot({ type: 'jpeg', quality: 50 }); } catch(e) {}
-
+        // SEND FAILURE + LOGS TO TG
         const recentLogs = runLogs.slice(-10).join('\n');
-        const failMsg = `⚠️ <b>FAILED TO ACTIVATE</b>\n\n👤 Name: ${name}\n🆔 UID: <code>${uid}</code>\n❌ Error: ${error.message}\n\n<b>📝 LOGS:</b>\n<pre>${recentLogs}</pre>`;
-        
-        if(chatId) {
-            if(screenshotBuffer) await sendTgPhoto(chatId, failMsg, screenshotBuffer);
-            else await sendTgMessage(chatId, failMsg);
-        }
+        if(globalAdminChatId) await sendTgMessage(globalAdminChatId, `⚠️ <b>FAILED TO ACTIVATE</b>\n\n👤 Name: ${name}\n🆔 UID: <code>${uid}</code>\n❌ Error: ${error.message}\n\n<b>📝 LOGS:</b>\n<pre>${recentLogs}</pre>`);
     } finally {
         if (browser) await browser.close();
         sysLog(`Engine Closed.`);
