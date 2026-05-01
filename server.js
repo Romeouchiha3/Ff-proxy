@@ -58,6 +58,11 @@ function checkAuth(req, res, next) {
     res.redirect(ADMIN_ROUTE + '/login');
 }
 
+// FIX 1: Root URL Redirect
+app.get('/', (req, res) => {
+    res.redirect(ADMIN_ROUTE);
+});
+
 // ==========================================
 // HTML TEMPLATES (ROMEO KING AURORA THEME)
 // ==========================================
@@ -132,7 +137,7 @@ app.post(ADMIN_ROUTE + '/verify-otp', (req, res) => {
     const { chatId, otp } = req.body;
     if (pendingOTPs[chatId] && pendingOTPs[chatId] === otp) {
         delete pendingOTPs[chatId];
-        globalAdminChatId = chatId; // Set for cron
+        globalAdminChatId = chatId; 
         res.cookie('romeo_auth', 'authenticated', { maxAge: 24*60*60*1000 });
         res.json({ success: true });
     } else {
@@ -142,7 +147,6 @@ app.post(ADMIN_ROUTE + '/verify-otp', (req, res) => {
 
 // DASHBOARD
 app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
-    // Note: User must create table 'targets' with columns 'id', 'uid', 'name' in Supabase
     const { data: users } = await supabase.from('targets').select('*');
     
     let usersHtml = '';
@@ -168,8 +172,8 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
                 <h3 style="color:var(--secondary); margin-top:20px;">Active Targets (15m Auto-Cycle)</h3>
                 <div style="max-height: 250px; overflow-y:auto; margin-bottom:20px;">${usersHtml}</div>
 
-                <h3 style="color:#fff;">Cron Live Logs</h3>
-                <div class="logs-box" id="logs">Waiting for next cycle...</div>
+                <h3 style="color:#fff;">Live Engine Logs</h3>
+                <div class="logs-box" id="logs">System ready. Waiting for tasks...</div>
             </div>
             <script src="/socket.io/socket.io.js"></script>
             <script>
@@ -183,6 +187,13 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
                 async function addUser() {
                     const name = document.getElementById('name').value;
                     const uid = document.getElementById('uid').value;
+                    if(!name || !uid) return alert('Name aur UID dono zaroori hain!');
+                    
+                    // Button UI update
+                    const btn = document.querySelector('button[onclick="addUser()"]');
+                    btn.innerText = 'Registering & Activating...';
+                    btn.disabled = true;
+
                     await fetch('${ADMIN_ROUTE}/add', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, uid}) });
                     location.reload();
                 }
@@ -195,10 +206,18 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
     `);
 });
 
+// FIX 2: Immediate Activation on Add
 app.post(ADMIN_ROUTE + '/add', checkAuth, async (req, res) => {
-    await supabase.from('targets').insert([{ name: req.body.name, uid: req.body.uid }]);
+    const { name, uid } = req.body;
+    await supabase.from('targets').insert([{ name, uid }]);
+    
+    // Foran activation trigger karega bina page reload ka wait kiye
+    io.emit('cron_log', `<span style="color:var(--secondary)">>> New target added! Triggering immediate activation for ${name}...</span>`);
+    runGhostActivator(uid, name).catch(e => console.log("Immediate run error:", e));
+
     res.json({ success: true });
 });
+
 app.post(ADMIN_ROUTE + '/del', checkAuth, async (req, res) => {
     await supabase.from('targets').delete().eq('id', req.body.id);
     res.json({ success: true });
@@ -214,21 +233,21 @@ async function runGhostActivator(uid, name) {
         
         browser = await puppeteer.launch({
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
-            headless: 'new', // Best for Railway
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable' // Railway Docker path
+            headless: 'new',
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable' 
         });
 
         const page = (await browser.pages())[0] || await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
 
-        page.on('dialog', async dialog => { await dialog.dismiss(); }); // Kill popups
+        page.on('dialog', async dialog => { await dialog.dismiss(); }); 
 
         await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         let safetyCounter = 0;
         let uidInjected = false;
         
-        while (safetyCounter < 60) { // Limit loop
+        while (safetyCounter < 60) { 
             safetyCounter++;
 
             const isSuccess = await page.evaluate(() => {
@@ -305,7 +324,6 @@ setInterval(async () => {
         if (users && users.length > 0) {
             for (let user of users) {
                 await runGhostActivator(user.uid, user.name);
-                // 10 second delay between each UID to avoid heavy CPU load
                 await new Promise(r => setTimeout(r, 10000)); 
             }
         } else {
@@ -317,8 +335,7 @@ setInterval(async () => {
     
     io.emit('cron_log', `--- Auto-Cycle Finished ---`);
     isCronRunning = false;
-}, 15 * 60 * 1000); // 15 Minutes
-
+}, 15 * 60 * 1000); 
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
