@@ -15,11 +15,12 @@ const SUPABASE_URL = 'https://nebwfonyhfgxnfkiisvs.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5lYndmb255aGZneG5ma2lpc3ZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzNjc0MjMsImV4cCI6MjA5MDk0MzQyM30.me-P_mhC3droVGrHSlD_G3h9-ZgGgR3hy8VyDLFTp58';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const TG_BOT_TOKEN = '5893809958:AAHxBCHFPDIwejnOV596s2joow3KOSLEnCI';
-let globalAdminChatId = null; 
+const ADMIN_PASSWORD = '@ROMEOPROXY789';
 
-const pendingOTPs = {}; 
-const activeTimers = {}; // Individual UID timers store karne ke liye
+// State Management
+const activeTimers = {}; 
+const lastActivationData = {}; // Format: { uid: "12:30 PM" }
+const systemLogs = []; // Array to keep logs persistent
 
 const app = express();
 const server = http.createServer(app);
@@ -33,20 +34,6 @@ process.on('uncaughtException', (err) => console.log(`[Shield] ${err.message}`))
 process.on('unhandledRejection', () => console.log(`[Shield] Rejection Prevented.`));
 
 // ==========================================
-// TELEGRAM BOT HELPERS
-// ==========================================
-async function sendTgMessage(chatId, text) {
-    try {
-        const url = `https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`;
-        await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'HTML' })
-        });
-    } catch(e) { console.log("TG Error:", e.message); }
-}
-
-// ==========================================
 // AUTH & ROUTING
 // ==========================================
 const ADMIN_ROUTE = '/lg/rg/admin/proxy';
@@ -56,121 +43,218 @@ function checkAuth(req, res, next) {
     res.redirect(ADMIN_ROUTE + '/login');
 }
 
-app.get('/', (req, res) => res.redirect(ADMIN_ROUTE));
-
 // ==========================================
-// HTML TEMPLATES (ROMEO KING AURORA)
+// HTML TEMPLATES (ROMEO KING PREMIUM AURORA)
 // ==========================================
-const auroraStyles = `
+const headMetaAndStyles = `
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
-        :root { --bg: #030005; --panel: #0a0510; --primary: #00ffcc; --secondary: #ff007f; --aurora: #8a2be2; --text: #e0e0e0; }
-        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; min-height: 100vh; position: relative; overflow-x: hidden; }
-        body::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(138,43,226,0.15) 0%, rgba(0,0,0,0) 50%), radial-gradient(circle at 80% 20%, rgba(0,255,204,0.1) 0%, rgba(0,0,0,0) 40%); z-index: -1; animation: aurora 10s infinite alternate; }
-        @keyframes aurora { 0% { transform: rotate(0deg); } 100% { transform: rotate(5deg); } }
+        :root { 
+            --bg: #05020a; 
+            --glass: rgba(15, 8, 25, 0.6); 
+            --primary: #00ffcc; 
+            --secondary: #ff007f; 
+            --aurora: #8a2be2; 
+            --text: #e0e0e0; 
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { 
+            background: var(--bg); color: var(--text); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; padding: 0; min-height: 100vh; position: relative; overflow-x: hidden;
+            background-image: radial-gradient(circle at top right, rgba(138,43,226,0.15) 0%, transparent 40%),
+                              radial-gradient(circle at bottom left, rgba(0,255,204,0.1) 0%, transparent 40%);
+        }
         
-        .container { background: rgba(10, 5, 16, 0.85); backdrop-filter: blur(10px); padding: 30px; border-radius: 16px; width: 100%; max-width: 800px; box-shadow: 0 0 30px rgba(138, 43, 226, 0.3), inset 0 0 10px rgba(0, 255, 204, 0.1); border: 1px solid rgba(138, 43, 226, 0.5); }
-        .header-title { text-align: center; color: #fff; text-shadow: 0 0 15px var(--primary), 0 0 30px var(--aurora); margin-bottom: 30px; letter-spacing: 3px; font-weight: 900; font-size: 28px;}
-        .crown { color: #ffd700; font-size: 32px; text-shadow: 0 0 20px #ffd700; }
+        /* Floating Rounded Header */
+        .floating-header {
+            position: sticky; top: 15px; margin: 0 15px 20px 15px; padding: 15px 25px;
+            background: var(--glass); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+            border-radius: 40px; border: 1px solid rgba(138, 43, 226, 0.4);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5), inset 0 0 15px rgba(138,43,226,0.2);
+            display: flex; justify-content: space-between; align-items: center; z-index: 1000;
+        }
+        .header-title { color: #fff; text-shadow: 0 0 10px var(--primary); font-weight: 900; font-size: 20px; letter-spacing: 2px; margin: 0;}
+        .header-nav a { color: var(--secondary); text-decoration: none; font-size: 12px; font-weight: bold; border: 1px solid var(--secondary); padding: 5px 10px; border-radius: 15px; box-shadow: 0 0 10px rgba(255,0,127,0.3); }
+
+        .container { padding: 0 15px 30px 15px; max-width: 800px; margin: auto; }
         
-        input { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid rgba(0, 255, 204, 0.4); background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; outline: none; box-sizing: border-box; margin-bottom: 15px; box-shadow: inset 0 0 10px rgba(0,0,0,0.8); transition: 0.3s;}
-        input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 255, 204, 0.3); }
+        .card { 
+            background: var(--glass); backdrop-filter: blur(10px); padding: 25px; border-radius: 20px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5), inset 0 0 10px rgba(0,255,204,0.1); 
+            border: 1px solid rgba(0,255,204,0.2); margin-bottom: 20px; 
+        }
+        h3 { margin-top: 0; color: var(--primary); text-shadow: 0 0 10px var(--primary); }
         
-        button { width: 100%; padding: 15px; background: linear-gradient(45deg, var(--aurora), var(--secondary)); color: #fff; border: none; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: bold; text-transform: uppercase; box-shadow: 0 0 15px rgba(255, 0, 127, 0.4); transition: 0.3s; margin-bottom: 15px;}
+        /* Input & Buttons (No Zoom on Mobile) */
+        input { 
+            width: 100%; padding: 16px; border-radius: 15px; border: 1px solid rgba(0, 255, 204, 0.4); 
+            background: rgba(0,0,0,0.7); color: #fff; font-size: 16px; outline: none; 
+            margin-bottom: 15px; transition: 0.3s; box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+        }
+        input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 255, 204, 0.4); }
+        
+        button { 
+            width: 100%; padding: 16px; background: linear-gradient(45deg, var(--aurora), var(--secondary)); 
+            color: #fff; border: none; border-radius: 15px; cursor: pointer; font-size: 16px; 
+            font-weight: bold; text-transform: uppercase; letter-spacing: 1px;
+            box-shadow: 0 0 15px rgba(255, 0, 127, 0.4); transition: 0.3s; margin-bottom: 15px;
+        }
         button:hover { transform: translateY(-2px); box-shadow: 0 0 25px rgba(255, 0, 127, 0.6); }
+
+        /* Dashboard Table */
+        .status-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .status-table th { color: var(--aurora); text-align: left; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 12px; text-transform: uppercase;}
+        .status-table td { padding: 15px 5px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 14px; }
+        .uid-badge { color: var(--primary); font-size: 11px; background: rgba(0,255,204,0.1); padding: 3px 6px; border-radius: 5px; }
+        .timer-badge { font-family: monospace; color: var(--secondary); background: rgba(255,0,127,0.1); padding: 5px 8px; border-radius: 8px; font-weight: bold; text-shadow: 0 0 5px var(--secondary);}
         
-        .user-card { background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,204,0.3); padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .del-btn { background: #ff3333; width: auto; padding: 8px 15px; margin: 0; box-shadow: 0 0 10px rgba(255,51,51,0.4); }
-        .logs-box { background: #000; border: 1px solid #333; border-radius: 10px; height: 350px; overflow-y: auto; padding: 15px; font-family: monospace; font-size: 13px; color: #a9b7c6; word-wrap: break-word;}
+        .user-card { background: rgba(0,0,0,0.5); border: 1px solid rgba(138,43,226,0.3); padding: 15px; border-radius: 15px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .del-btn { background: #ff3333; width: auto; padding: 10px 15px; margin: 0; box-shadow: 0 0 10px rgba(255,51,51,0.4); border-radius: 10px; font-size: 13px;}
+        
+        /* Persistent Logs Area */
+        .logs-box { 
+            background: rgba(0,0,0,0.8); border: 1px solid #333; border-radius: 15px; 
+            height: 350px; overflow-y: auto; padding: 15px; font-family: 'Courier New', monospace; 
+            font-size: 12px; color: #a9b7c6; word-wrap: break-word; box-shadow: inset 0 0 20px rgba(0,0,0,1);
+        }
+        .log-entry { margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; }
+        .log-time { color: #555; font-size: 10px; }
         .log-name { color: var(--primary); font-weight: bold; }
-        .log-api { color: var(--secondary); font-size: 11px; }
     </style>
 `;
 
-app.get(ADMIN_ROUTE + '/login', (req, res) => {
+// ==========================================
+// 1. PUBLIC DASHBOARD (Root)
+// ==========================================
+app.get('/', async (req, res) => {
     res.send(`
-        <html><head><title>ROMEO KING Auth</title>${auroraStyles}</head><body>
+        <!DOCTYPE html>
+        <html><head><title>ROMEO LIVE STATUS</title>${headMetaAndStyles}</head><body>
+            <div class="floating-header">
+                <div class="header-title">👑 ROMEO KING</div>
+                <div class="header-nav"><a href="${ADMIN_ROUTE}">ADMIN LOGIN</a></div>
+            </div>
             <div class="container">
-                <div class="header-title"><span class="crown">👑</span><br>ROMEO KING</div>
-                <div id="step1">
-                    <input type="text" id="chatId" placeholder="Enter Telegram Chat ID" />
-                    <button onclick="sendOtp()">Send OTP</button>
-                </div>
-                <div id="step2" style="display:none;">
-                    <input type="text" id="otp" placeholder="Enter 4-Digit OTP" />
-                    <button onclick="verifyOtp()">Login</button>
+                <div class="card">
+                    <h3>LIVE ACTIVATION STATUS</h3>
+                    <div style="overflow-x:auto;">
+                        <table class="status-table">
+                            <thead><tr><th>User (UID)</th><th>Last Activated</th><th>Next Run In</th></tr></thead>
+                            <tbody id="status-body"><tr><td colspan="3" style="text-align:center;">Loading Engine Data...</td></tr></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
+            <script src="/socket.io/socket.io.js"></script>
             <script>
-                async function sendOtp() {
-                    const chatId = document.getElementById('chatId').value;
-                    const res = await fetch('${ADMIN_ROUTE}/send-otp', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({chatId}) });
-                    if((await res.json()).success) { document.getElementById('step1').style.display = 'none'; document.getElementById('step2').style.display = 'block'; alert('OTP Sent!'); }
-                }
-                async function verifyOtp() {
-                    const chatId = document.getElementById('chatId').value;
-                    const otp = document.getElementById('otp').value;
-                    const res = await fetch('${ADMIN_ROUTE}/verify-otp', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({chatId, otp}) });
-                    if(res.ok) window.location.href = '${ADMIN_ROUTE}'; else alert('Invalid OTP!');
-                }
+                const socket = io();
+                socket.on('update_ui', data => {
+                    const tbody = document.getElementById('status-body');
+                    if(Object.keys(data).length === 0) return tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;">No active targets.</td></tr>';
+                    
+                    let html = '';
+                    for (const uid in data) {
+                        const info = data[uid];
+                        // Frontend script, so we keep the slash escapes here for literal string generation
+                        html += \`<tr>
+                            <td>\${info.name}<br><span class="uid-badge">\${uid}</span></td>
+                            <td style="color:#aaa;">\${info.lastTime}</td>
+                            <td><span class="timer-badge">\${info.remaining}</span></td>
+                        </tr>\`;
+                    }
+                    tbody.innerHTML = html;
+                });
             </script>
         </body></html>
     `);
 });
 
-app.post(ADMIN_ROUTE + '/send-otp', async (req, res) => {
-    const { chatId } = req.body;
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    pendingOTPs[chatId] = otp;
-    await sendTgMessage(chatId, `👑 <b>ROMEO KING SYSTEM</b>\n\nYour Admin Login OTP is: <b>${otp}</b>`);
-    res.json({ success: true });
+// ==========================================
+// 2. ADMIN LOGIN
+// ==========================================
+app.get(ADMIN_ROUTE + '/login', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html><head><title>ROMEO KING Auth</title>${headMetaAndStyles}</head><body>
+            <div class="floating-header" style="justify-content:center;">
+                <div class="header-title">👑 SYSTEM ACCESS</div>
+            </div>
+            <div class="container" style="margin-top: 10vh;">
+                <div class="card" style="text-align:center; padding: 40px 20px;">
+                    <h2 style="color:var(--secondary); text-shadow: 0 0 15px var(--secondary); margin-bottom: 30px;">ENTER PASSWORD</h2>
+                    <form action="${ADMIN_ROUTE}/login" method="POST">
+                        <input type="password" name="password" placeholder="Admin Password" required />
+                        <button type="submit">UNLOCK SYSTEM</button>
+                    </form>
+                </div>
+            </div>
+        </body></html>
+    `);
 });
 
-app.post(ADMIN_ROUTE + '/verify-otp', (req, res) => {
-    const { chatId, otp } = req.body;
-    if (pendingOTPs[chatId] && pendingOTPs[chatId] === otp) {
-        delete pendingOTPs[chatId];
-        globalAdminChatId = chatId; 
+app.post(ADMIN_ROUTE + '/login', (req, res) => {
+    if (req.body.password === ADMIN_PASSWORD) {
         res.cookie('romeo_auth', 'authenticated', { maxAge: 24*60*60*1000 });
-        res.json({ success: true });
+        res.redirect(ADMIN_ROUTE);
     } else {
-        res.status(401).json({ success: false });
+        res.send(`<script>alert('Invalid Password!'); window.location.href='${ADMIN_ROUTE}/login';</script>`);
     }
 });
 
+// ==========================================
+// 3. ADMIN PANEL
+// ==========================================
 app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
     const { data: users } = await supabase.from('targets').select('*');
     let usersHtml = '';
     if (users) {
         users.forEach(u => {
             usersHtml += `<div class="user-card">
-                <div><b>${u.name}</b> <br> <span style="color:#00ffcc; font-size:12px;">UID: ${u.uid}</span></div>
-                <button class="del-btn" onclick="delUser('${u.id}', '${u.uid}')">Delete</button>
+                <div><b>${u.name}</b> <br> <span class="uid-badge">UID: ${u.uid}</span></div>
+                <button class="del-btn" onclick="delUser('${u.id}', '${u.uid}')">Remove</button>
             </div>`;
         });
     }
 
     res.send(`
-        <html><head><title>Admin Panel</title>${auroraStyles}</head><body>
+        <!DOCTYPE html>
+        <html><head><title>Admin Panel</title>${headMetaAndStyles}</head><body>
+            <div class="floating-header">
+                <div class="header-title">👑 CONTROL PANEL</div>
+                <div class="header-nav"><a href="/" style="border-color:var(--primary); color:var(--primary);">LIVE VIEW</a></div>
+            </div>
             <div class="container">
-                <div class="header-title"><span class="crown">👑</span><br>ROMEO KING PANEL</div>
-                
-                <h3 style="color:var(--primary);">Add Target</h3>
-                <input type="text" id="name" placeholder="User Name (e.g. Ali)" />
-                <input type="text" id="uid" placeholder="Target UID" />
-                <button onclick="addUser()">Register UID</button>
+                <div class="card">
+                    <h3>Add Target</h3>
+                    <input type="text" id="name" placeholder="User Name (e.g. Ali)" />
+                    <input type="text" id="uid" placeholder="Target UID" />
+                    <button onclick="addUser()">Register & Start Cycle</button>
+                </div>
 
-                <h3 style="color:var(--secondary); margin-top:20px;">Active Targets (40 Min Cycle)</h3>
-                <div style="max-height: 200px; overflow-y:auto; margin-bottom:20px;">${usersHtml}</div>
+                <div class="card">
+                    <h3 style="color:var(--secondary);">Managed Targets</h3>
+                    <div style="max-height: 250px; overflow-y:auto;">${usersHtml || '<p style="color:#666;">No targets yet.</p>'}</div>
+                </div>
 
-                <h3 style="color:#fff;">Live Engine Operations & APIs</h3>
-                <div class="logs-box" id="logs">System ready. Waiting for tasks...</div>
+                <div class="card">
+                    <h3 style="color:#fff;">Engine Terminal</h3>
+                    <div class="logs-box" id="logs">Waiting for connection...</div>
+                </div>
             </div>
             <script src="/socket.io/socket.io.js"></script>
             <script>
                 const socket = io();
-                socket.on('cron_log', msg => {
+                
+                socket.on('init_logs', logs => {
                     const l = document.getElementById('logs');
-                    l.innerHTML += '<div style="margin-bottom:5px;">[' + new Date().toLocaleTimeString() + '] ' + msg + '</div>';
+                    l.innerHTML = logs.join('') || '<div class="log-entry">System ready.</div>';
+                    l.scrollTop = l.scrollHeight;
+                });
+
+                socket.on('cron_log', html => {
+                    const l = document.getElementById('logs');
+                    l.innerHTML += html;
                     l.scrollTop = l.scrollHeight;
                 });
 
@@ -193,13 +277,52 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
 });
 
 // ==========================================
+// SOCKET.IO & STATE MANAGEMENT
+// ==========================================
+io.on('connection', (socket) => {
+    socket.emit('init_logs', systemLogs);
+});
+
+// UI Updater Loop (For Countdown Timers)
+setInterval(() => {
+    const uiData = {};
+    const now = Date.now();
+    for (const uid in activeTimers) {
+        const timerObj = activeTimers[uid];
+        const diff = timerObj.nextRun - now;
+        
+        let remainingStr = "Running...";
+        if (diff > 0) {
+            const mins = Math.floor(diff / 60000);
+            const secs = Math.floor((diff % 60000) / 1000);
+            remainingStr = `${mins}m ${secs}s`; // Fixed Syntax Here
+        }
+
+        uiData[uid] = {
+            name: timerObj.name,
+            lastTime: lastActivationData[uid] || 'Pending...',
+            remaining: remainingStr
+        };
+    }
+    io.emit('update_ui', uiData);
+}, 1000);
+
+function appendLog(html) {
+    const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Karachi', hour12: false });
+    const fullLog = `<div class="log-entry"><span class="log-time">[${timeStr}]</span> ${html}</div>`; // Fixed Syntax Here
+    
+    systemLogs.push(fullLog);
+    if(systemLogs.length > 100) systemLogs.shift();
+    
+    io.emit('cron_log', fullLog);
+}
+
+// ==========================================
 // UID MANAGEMENT & CYCLE START
 // ==========================================
 app.post(ADMIN_ROUTE + '/add', checkAuth, async (req, res) => {
     const { name, uid } = req.body;
     await supabase.from('targets').insert([{ name, uid }]);
-    
-    // START INDIVIDUAL CYCLE IMMEDIATELY
     startUIDCycle(uid, name);
     res.json({ success: true });
 });
@@ -207,69 +330,56 @@ app.post(ADMIN_ROUTE + '/add', checkAuth, async (req, res) => {
 app.post(ADMIN_ROUTE + '/del', checkAuth, async (req, res) => {
     const { id, uid } = req.body;
     await supabase.from('targets').delete().eq('id', id);
-    
-    // STOP TIMER
     if (activeTimers[uid]) {
-        clearInterval(activeTimers[uid]);
+        clearInterval(activeTimers[uid].interval);
         delete activeTimers[uid];
-        io.emit('cron_log', `🛑 Stopped 40-Min cycle for [${uid}]`);
+        appendLog(`🛑 Stopped cycle for [${uid}]`); // Fixed Syntax Here
     }
     res.json({ success: true });
 });
 
-// ==========================================
-// 40 MINUTE INDIVIDUAL CYCLE LOGIC
-// ==========================================
 function startUIDCycle(uid, name) {
-    io.emit('cron_log', `<span style="color:var(--secondary)">>> Registering ${name} & Starting immediate activation!</span>`);
+    appendLog(`<span style="color:var(--secondary)">>> Registering ${name} & Starting immediate run!</span>`); // Fixed Syntax Here
     
-    // Pehli dafa foran chalay ga
-    runGhostActivator(uid, name).catch(e => console.log("Run error:", e));
+    if (activeTimers[uid]) clearInterval(activeTimers[uid].interval);
+    
+    const getNextRun = () => Date.now() + (40 * 60 * 1000);
 
-    // Uske baad har 40 minutes baad chalay ga
-    if (activeTimers[uid]) clearInterval(activeTimers[uid]);
-    
-    activeTimers[uid] = setInterval(() => {
-        io.emit('cron_log', `<span style="color:var(--secondary)">>> 40 Mins passed! Reactivating ${name}...</span>`);
-        runGhostActivator(uid, name).catch(e => console.log("Run error:", e));
-    }, 40 * 60 * 1000); // 40 Minutes
+    runGhostActivator(uid, name).catch(e => console.log(e));
+
+    activeTimers[uid] = {
+        name: name,
+        nextRun: getNextRun(),
+        interval: setInterval(() => {
+            activeTimers[uid].nextRun = getNextRun();
+            appendLog(`<span style="color:var(--secondary)">>> 40 Mins passed! Reactivating ${name}...</span>`); // Fixed Syntax Here
+            runGhostActivator(uid, name).catch(e => console.log(e));
+        }, 40 * 60 * 1000)
+    };
 }
 
-// RESTORE TIMERS ON SERVER START (Agar app restart ho)
+// RESTORE TIMERS ON SERVER START
 setTimeout(async () => {
     try {
         const { data: users } = await supabase.from('targets').select('*');
         if (users && users.length > 0) {
-            console.log(`Restoring cycles for ${users.length} targets...`);
+            appendLog(`Restoring cycles for ${users.length} targets...`); // Fixed Syntax Here
             users.forEach((u, index) => {
-                // Har user 15 seconds ke gap se start hoga server bachaane ke liye
-                setTimeout(() => {
-                    startUIDCycle(u.uid, u.name);
-                }, index * 15000); 
+                setTimeout(() => startUIDCycle(u.uid, u.name), index * 10000);
             });
         }
     } catch(e) { console.log("Restore error:", e); }
-}, 5000);
-
+}, 3000);
 
 // ==========================================
 // AUTO-PILOT CHROMIUM CORE (THE GHOST)
 // ==========================================
 async function runGhostActivator(uid, name) {
     let browser;
-    let runLogs = []; // Stores logs to send to TG
-
-    const sysLog = (msg, isApi = false) => {
-        // Dashboard Log
-        const uiHtml = `<span class="log-name">[${name}]</span> ${isApi ? `<span class="log-api">${msg}</span>` : msg}`;
-        io.emit('cron_log', uiHtml);
-        
-        // TG Log (Clean text)
-        runLogs.push(isApi ? `📡 ${msg}` : `⚙️ ${msg}`);
-    };
+    const sysLog = (msg) => appendLog(`<span class="log-name">[${name}]</span> ${msg}`); // Fixed Syntax Here
 
     try {
-        sysLog(`Starting Ghost Engine...`);
+        sysLog(`Starting Engine...`); // Fixed Syntax Here
         
         browser = await puppeteer.launch({
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
@@ -282,43 +392,24 @@ async function runGhostActivator(uid, name) {
 
         page.on('dialog', async dialog => { await dialog.dismiss(); }); 
 
-        // TRACK API HITS
-        await page.setRequestInterception(true);
-        page.on('request', request => {
-            if (request.resourceType() === 'fetch' || request.resourceType() === 'xhr') {
-                const url = request.url();
-                if(url.includes('unlockffbeta.com') || url.includes('auqot.com')) { // Filtering important APIs only
-                    sysLog(`[${request.method()}] ${url.substring(0, 60)}...`, true);
-                }
-            }
-            request.continue();
-        });
-
         await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         let safetyCounter = 0;
         let uidInjected = false;
         
-        while (safetyCounter < 60) { 
+        while (safetyCounter < 45) { 
             safetyCounter++;
 
             const isSuccess = await page.evaluate(() => {
                 const text = document.body.innerText.toLowerCase();
                 if (text.includes('step ') && text.includes(' of ')) return false;
-                return text.includes('access granted') || text.includes('success') || text.includes('expires in');
+                return text.includes('access granted') || text.includes('successfully') || text.includes('expires in');
             });
 
             if (isSuccess) {
-                sysLog(`<span style="color:#39ff14">Activation Successful!</span>`);
-                
-                // SEND FULL LOG TO TG
-                const timeStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Karachi' });
-                const recentLogs = runLogs.slice(-12).join('\n'); // Bhejte waqt last 12 actions bhejein (limit bachane ke liye)
-                
-                const msg = `👑 <b>ROMEO KING SYSTEM</b>\n\n✅ <b>ACTIVATION SUCCESSFUL!</b>\n\n👤 <b>Name:</b> ${name}\n🆔 <b>UID:</b> <code>${uid}</code>\n⏰ <b>Time:</b> ${timeStr}\n\n<b>📝 EXECUTION LOGS:</b>\n<pre>${recentLogs}</pre>`;
-                
-                if(globalAdminChatId) await sendTgMessage(globalAdminChatId, msg);
-                return true;
+                sysLog(`<span style="color:#39ff14; font-weight:bold;">✅ Activation Successful!</span>`); // Fixed Syntax Here
+                lastActivationData[uid] = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Karachi' });
+                return true; 
             }
 
             if (!uidInjected) {
@@ -334,7 +425,7 @@ async function runGhostActivator(uid, name) {
                 }, uid);
                 if (injected) { 
                     uidInjected = true; 
-                    sysLog(`UID Inserted.`); 
+                    sysLog(`UID Inserted.`); // Fixed Syntax Here
                     await new Promise(r => setTimeout(r, 1000)); 
                 }
             }
@@ -357,25 +448,21 @@ async function runGhostActivator(uid, name) {
             });
 
             if (clicked) {
-                sysLog(`Clicked: "${clicked}"`);
+                sysLog(`Clicked: "${clicked}"`); // Fixed Syntax Here
                 await new Promise(r => setTimeout(r, 2000));
             } else {
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 1500));
             }
             
             const isBlocked = await page.evaluate(() => document.body.innerText.toLowerCase().includes('invalid id'));
-            if(isBlocked) throw new Error("Invalid ID / Blocked by Site");
+            if(isBlocked) throw new Error("Invalid ID / Blocked");
         }
         throw new Error("Timeout! Took too long.");
     } catch (error) {
-        sysLog(`<span style="color:#ff3333">Error: ${error.message}</span>`);
-        
-        // SEND FAILURE + LOGS TO TG
-        const recentLogs = runLogs.slice(-10).join('\n');
-        if(globalAdminChatId) await sendTgMessage(globalAdminChatId, `⚠️ <b>FAILED TO ACTIVATE</b>\n\n👤 Name: ${name}\n🆔 UID: <code>${uid}</code>\n❌ Error: ${error.message}\n\n<b>📝 LOGS:</b>\n<pre>${recentLogs}</pre>`);
+        sysLog(`<span style="color:#ff3333">❌ Error: ${error.message}</span>`); // Fixed Syntax Here
     } finally {
         if (browser) await browser.close();
-        sysLog(`Engine Closed.`);
+        sysLog(`Engine Closed.`); // Fixed Syntax Here
     }
 }
 
@@ -383,6 +470,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`\n=========================================`);
     console.log(`👑 ROMEO KING ADMIN SERVER RUNNING`);
-    console.log(`👉 ${ADMIN_ROUTE}/login`);
+    console.log(`👉 Admin: http://localhost:${PORT}${ADMIN_ROUTE}/login`);
+    console.log(`👉 Live Status: http://localhost:${PORT}/`);
     console.log(`=========================================\n`);
 });
