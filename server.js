@@ -16,10 +16,10 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const TG_BOT_TOKEN = '5893809958:AAHxBCHFPDIwejnOV596s2joow3KOSLEnCI';
-let globalAdminChatId = null; // Save chat ID for cron notifications
+let globalAdminChatId = null; 
 
-// OTP Memory Storage
 const pendingOTPs = {}; 
+const activeTimers = {}; // Individual UID timers store karne ke liye
 
 const app = express();
 const server = http.createServer(app);
@@ -29,7 +29,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Anti-Crash
 process.on('uncaughtException', (err) => console.log(`[Shield] ${err.message}`));
 process.on('unhandledRejection', () => console.log(`[Shield] Rejection Prevented.`));
 
@@ -52,19 +51,15 @@ async function sendTgMessage(chatId, text) {
 // ==========================================
 const ADMIN_ROUTE = '/lg/rg/admin/proxy';
 
-// Middleware to check auth
 function checkAuth(req, res, next) {
     if (req.cookies.romeo_auth === 'authenticated') return next();
     res.redirect(ADMIN_ROUTE + '/login');
 }
 
-// FIX 1: Root URL Redirect
-app.get('/', (req, res) => {
-    res.redirect(ADMIN_ROUTE);
-});
+app.get('/', (req, res) => res.redirect(ADMIN_ROUTE));
 
 // ==========================================
-// HTML TEMPLATES (ROMEO KING AURORA THEME)
+// HTML TEMPLATES (ROMEO KING AURORA)
 // ==========================================
 const auroraStyles = `
     <style>
@@ -73,23 +68,24 @@ const auroraStyles = `
         body::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(138,43,226,0.15) 0%, rgba(0,0,0,0) 50%), radial-gradient(circle at 80% 20%, rgba(0,255,204,0.1) 0%, rgba(0,0,0,0) 40%); z-index: -1; animation: aurora 10s infinite alternate; }
         @keyframes aurora { 0% { transform: rotate(0deg); } 100% { transform: rotate(5deg); } }
         
-        .container { background: rgba(10, 5, 16, 0.85); backdrop-filter: blur(10px); padding: 30px; border-radius: 16px; width: 100%; max-width: 600px; box-shadow: 0 0 30px rgba(138, 43, 226, 0.3), inset 0 0 10px rgba(0, 255, 204, 0.1); border: 1px solid rgba(138, 43, 226, 0.5); }
+        .container { background: rgba(10, 5, 16, 0.85); backdrop-filter: blur(10px); padding: 30px; border-radius: 16px; width: 100%; max-width: 800px; box-shadow: 0 0 30px rgba(138, 43, 226, 0.3), inset 0 0 10px rgba(0, 255, 204, 0.1); border: 1px solid rgba(138, 43, 226, 0.5); }
         .header-title { text-align: center; color: #fff; text-shadow: 0 0 15px var(--primary), 0 0 30px var(--aurora); margin-bottom: 30px; letter-spacing: 3px; font-weight: 900; font-size: 28px;}
         .crown { color: #ffd700; font-size: 32px; text-shadow: 0 0 20px #ffd700; }
         
         input { width: 100%; padding: 15px; border-radius: 10px; border: 1px solid rgba(0, 255, 204, 0.4); background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; outline: none; box-sizing: border-box; margin-bottom: 15px; box-shadow: inset 0 0 10px rgba(0,0,0,0.8); transition: 0.3s;}
-        input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 255, 204, 0.3), inset 0 0 10px rgba(0,0,0,0.8); }
+        input:focus { border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 255, 204, 0.3); }
         
         button { width: 100%; padding: 15px; background: linear-gradient(45deg, var(--aurora), var(--secondary)); color: #fff; border: none; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: bold; text-transform: uppercase; box-shadow: 0 0 15px rgba(255, 0, 127, 0.4); transition: 0.3s; margin-bottom: 15px;}
         button:hover { transform: translateY(-2px); box-shadow: 0 0 25px rgba(255, 0, 127, 0.6); }
         
         .user-card { background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,204,0.3); padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .del-btn { background: #ff3333; width: auto; padding: 8px 15px; margin: 0; box-shadow: 0 0 10px rgba(255,51,51,0.4); }
-        .logs-box { background: #000; border: 1px solid #333; border-radius: 10px; height: 200px; overflow-y: auto; padding: 10px; font-family: monospace; font-size: 12px; color: #a9b7c6; }
+        .logs-box { background: #000; border: 1px solid #333; border-radius: 10px; height: 350px; overflow-y: auto; padding: 15px; font-family: monospace; font-size: 13px; color: #a9b7c6; word-wrap: break-word;}
+        .log-name { color: var(--primary); font-weight: bold; }
+        .log-api { color: var(--secondary); font-size: 11px; }
     </style>
 `;
 
-// LOGIN PAGE
 app.get(ADMIN_ROUTE + '/login', (req, res) => {
     res.send(`
         <html><head><title>ROMEO KING Auth</title>${auroraStyles}</head><body>
@@ -108,23 +104,19 @@ app.get(ADMIN_ROUTE + '/login', (req, res) => {
                 async function sendOtp() {
                     const chatId = document.getElementById('chatId').value;
                     const res = await fetch('${ADMIN_ROUTE}/send-otp', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({chatId}) });
-                    const data = await res.json();
-                    if(data.success) { document.getElementById('step1').style.display = 'none'; document.getElementById('step2').style.display = 'block'; alert('OTP Sent to Telegram!'); }
-                    else alert('Failed to send OTP');
+                    if((await res.json()).success) { document.getElementById('step1').style.display = 'none'; document.getElementById('step2').style.display = 'block'; alert('OTP Sent!'); }
                 }
                 async function verifyOtp() {
                     const chatId = document.getElementById('chatId').value;
                     const otp = document.getElementById('otp').value;
                     const res = await fetch('${ADMIN_ROUTE}/verify-otp', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({chatId, otp}) });
-                    if(res.ok) window.location.href = '${ADMIN_ROUTE}';
-                    else alert('Invalid OTP!');
+                    if(res.ok) window.location.href = '${ADMIN_ROUTE}'; else alert('Invalid OTP!');
                 }
             </script>
         </body></html>
     `);
 });
 
-// AUTH APIs
 app.post(ADMIN_ROUTE + '/send-otp', async (req, res) => {
     const { chatId } = req.body;
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
@@ -145,16 +137,14 @@ app.post(ADMIN_ROUTE + '/verify-otp', (req, res) => {
     }
 });
 
-// DASHBOARD
 app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
     const { data: users } = await supabase.from('targets').select('*');
-    
     let usersHtml = '';
     if (users) {
         users.forEach(u => {
             usersHtml += `<div class="user-card">
                 <div><b>${u.name}</b> <br> <span style="color:#00ffcc; font-size:12px;">UID: ${u.uid}</span></div>
-                <button class="del-btn" onclick="delUser('${u.id}')">Delete</button>
+                <button class="del-btn" onclick="delUser('${u.id}', '${u.uid}')">Delete</button>
             </div>`;
         });
     }
@@ -169,10 +159,10 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
                 <input type="text" id="uid" placeholder="Target UID" />
                 <button onclick="addUser()">Register UID</button>
 
-                <h3 style="color:var(--secondary); margin-top:20px;">Active Targets (15m Auto-Cycle)</h3>
-                <div style="max-height: 250px; overflow-y:auto; margin-bottom:20px;">${usersHtml}</div>
+                <h3 style="color:var(--secondary); margin-top:20px;">Active Targets (40 Min Cycle)</h3>
+                <div style="max-height: 200px; overflow-y:auto; margin-bottom:20px;">${usersHtml}</div>
 
-                <h3 style="color:#fff;">Live Engine Logs</h3>
+                <h3 style="color:#fff;">Live Engine Operations & APIs</h3>
                 <div class="logs-box" id="logs">System ready. Waiting for tasks...</div>
             </div>
             <script src="/socket.io/socket.io.js"></script>
@@ -180,25 +170,21 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
                 const socket = io();
                 socket.on('cron_log', msg => {
                     const l = document.getElementById('logs');
-                    l.innerHTML += '<div>[' + new Date().toLocaleTimeString() + '] ' + msg + '</div>';
+                    l.innerHTML += '<div style="margin-bottom:5px;">[' + new Date().toLocaleTimeString() + '] ' + msg + '</div>';
                     l.scrollTop = l.scrollHeight;
                 });
 
                 async function addUser() {
                     const name = document.getElementById('name').value;
                     const uid = document.getElementById('uid').value;
-                    if(!name || !uid) return alert('Name aur UID dono zaroori hain!');
-                    
-                    // Button UI update
+                    if(!name || !uid) return alert('Name aur UID zaroori hain!');
                     const btn = document.querySelector('button[onclick="addUser()"]');
-                    btn.innerText = 'Registering & Activating...';
-                    btn.disabled = true;
-
+                    btn.innerText = 'Registering...'; btn.disabled = true;
                     await fetch('${ADMIN_ROUTE}/add', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, uid}) });
                     location.reload();
                 }
-                async function delUser(id) {
-                    await fetch('${ADMIN_ROUTE}/del', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id}) });
+                async function delUser(id, uid) {
+                    await fetch('${ADMIN_ROUTE}/del', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, uid}) });
                     location.reload();
                 }
             </script>
@@ -206,30 +192,84 @@ app.get(ADMIN_ROUTE, checkAuth, async (req, res) => {
     `);
 });
 
-// FIX 2: Immediate Activation on Add
+// ==========================================
+// UID MANAGEMENT & CYCLE START
+// ==========================================
 app.post(ADMIN_ROUTE + '/add', checkAuth, async (req, res) => {
     const { name, uid } = req.body;
     await supabase.from('targets').insert([{ name, uid }]);
     
-    // Foran activation trigger karega bina page reload ka wait kiye
-    io.emit('cron_log', `<span style="color:var(--secondary)">>> New target added! Triggering immediate activation for ${name}...</span>`);
-    runGhostActivator(uid, name).catch(e => console.log("Immediate run error:", e));
-
+    // START INDIVIDUAL CYCLE IMMEDIATELY
+    startUIDCycle(uid, name);
     res.json({ success: true });
 });
 
 app.post(ADMIN_ROUTE + '/del', checkAuth, async (req, res) => {
-    await supabase.from('targets').delete().eq('id', req.body.id);
+    const { id, uid } = req.body;
+    await supabase.from('targets').delete().eq('id', id);
+    
+    // STOP TIMER
+    if (activeTimers[uid]) {
+        clearInterval(activeTimers[uid]);
+        delete activeTimers[uid];
+        io.emit('cron_log', `🛑 Stopped 40-Min cycle for [${uid}]`);
+    }
     res.json({ success: true });
 });
+
+// ==========================================
+// 40 MINUTE INDIVIDUAL CYCLE LOGIC
+// ==========================================
+function startUIDCycle(uid, name) {
+    io.emit('cron_log', `<span style="color:var(--secondary)">>> Registering ${name} & Starting immediate activation!</span>`);
+    
+    // Pehli dafa foran chalay ga
+    runGhostActivator(uid, name).catch(e => console.log("Run error:", e));
+
+    // Uske baad har 40 minutes baad chalay ga
+    if (activeTimers[uid]) clearInterval(activeTimers[uid]);
+    
+    activeTimers[uid] = setInterval(() => {
+        io.emit('cron_log', `<span style="color:var(--secondary)">>> 40 Mins passed! Reactivating ${name}...</span>`);
+        runGhostActivator(uid, name).catch(e => console.log("Run error:", e));
+    }, 40 * 60 * 1000); // 40 Minutes
+}
+
+// RESTORE TIMERS ON SERVER START (Agar app restart ho)
+setTimeout(async () => {
+    try {
+        const { data: users } = await supabase.from('targets').select('*');
+        if (users && users.length > 0) {
+            console.log(`Restoring cycles for ${users.length} targets...`);
+            users.forEach((u, index) => {
+                // Har user 15 seconds ke gap se start hoga server bachaane ke liye
+                setTimeout(() => {
+                    startUIDCycle(u.uid, u.name);
+                }, index * 15000); 
+            });
+        }
+    } catch(e) { console.log("Restore error:", e); }
+}, 5000);
+
 
 // ==========================================
 // AUTO-PILOT CHROMIUM CORE (THE GHOST)
 // ==========================================
 async function runGhostActivator(uid, name) {
     let browser;
+    let runLogs = []; // Stores logs to send to TG
+
+    const sysLog = (msg, isApi = false) => {
+        // Dashboard Log
+        const uiHtml = `<span class="log-name">[${name}]</span> ${isApi ? `<span class="log-api">${msg}</span>` : msg}`;
+        io.emit('cron_log', uiHtml);
+        
+        // TG Log (Clean text)
+        runLogs.push(isApi ? `📡 ${msg}` : `⚙️ ${msg}`);
+    };
+
     try {
-        io.emit('cron_log', `Starting Ghost Engine for ${name} [${uid}]...`);
+        sysLog(`Starting Ghost Engine...`);
         
         browser = await puppeteer.launch({
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
@@ -241,6 +281,18 @@ async function runGhostActivator(uid, name) {
         await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
 
         page.on('dialog', async dialog => { await dialog.dismiss(); }); 
+
+        // TRACK API HITS
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+            if (request.resourceType() === 'fetch' || request.resourceType() === 'xhr') {
+                const url = request.url();
+                if(url.includes('unlockffbeta.com') || url.includes('auqot.com')) { // Filtering important APIs only
+                    sysLog(`[${request.method()}] ${url.substring(0, 60)}...`, true);
+                }
+            }
+            request.continue();
+        });
 
         await page.goto('https://unlockffbeta.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
@@ -257,10 +309,15 @@ async function runGhostActivator(uid, name) {
             });
 
             if (isSuccess) {
+                sysLog(`<span style="color:#39ff14">Activation Successful!</span>`);
+                
+                // SEND FULL LOG TO TG
                 const timeStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Karachi' });
-                const msg = `👑 <b>ROMEO KING SYSTEM</b>\n\n✅ <b>ACTIVATION SUCCESSFUL!</b>\n\n👤 <b>Name:</b> ${name}\n🆔 <b>UID:</b> <code>${uid}</code>\n⏰ <b>Time (PKT):</b> ${timeStr}\n\n<i>Auto-Cycle Status: Active</i>`;
+                const recentLogs = runLogs.slice(-12).join('\n'); // Bhejte waqt last 12 actions bhejein (limit bachane ke liye)
+                
+                const msg = `👑 <b>ROMEO KING SYSTEM</b>\n\n✅ <b>ACTIVATION SUCCESSFUL!</b>\n\n👤 <b>Name:</b> ${name}\n🆔 <b>UID:</b> <code>${uid}</code>\n⏰ <b>Time:</b> ${timeStr}\n\n<b>📝 EXECUTION LOGS:</b>\n<pre>${recentLogs}</pre>`;
+                
                 if(globalAdminChatId) await sendTgMessage(globalAdminChatId, msg);
-                io.emit('cron_log', `<span style="color:#39ff14">Success: ${name} [${uid}] activated!</span>`);
                 return true;
             }
 
@@ -275,7 +332,11 @@ async function runGhostActivator(uid, name) {
                     }
                     return false;
                 }, uid);
-                if (injected) { uidInjected = true; await new Promise(r => setTimeout(r, 1000)); }
+                if (injected) { 
+                    uidInjected = true; 
+                    sysLog(`UID Inserted.`); 
+                    await new Promise(r => setTimeout(r, 1000)); 
+                }
             }
 
             const clicked = await page.evaluate(() => {
@@ -288,54 +349,35 @@ async function runGhostActivator(uid, name) {
                         if (targets.some(t => text === t || text.includes(t))) {
                             btn.scrollIntoView({ behavior: 'instant', block: 'center' });
                             if (typeof btn.click === 'function') btn.click();
-                            return true;
+                            return text;
                         }
                     }
                 }
-                return false;
+                return null;
             });
 
-            if (clicked) await new Promise(r => setTimeout(r, 2000));
-            else await new Promise(r => setTimeout(r, 1000));
+            if (clicked) {
+                sysLog(`Clicked: "${clicked}"`);
+                await new Promise(r => setTimeout(r, 2000));
+            } else {
+                await new Promise(r => setTimeout(r, 1000));
+            }
             
             const isBlocked = await page.evaluate(() => document.body.innerText.toLowerCase().includes('invalid id'));
-            if(isBlocked) throw new Error("Invalid ID / Blocked");
+            if(isBlocked) throw new Error("Invalid ID / Blocked by Site");
         }
-        throw new Error("Timeout");
+        throw new Error("Timeout! Took too long.");
     } catch (error) {
-        io.emit('cron_log', `<span style="color:#ff3333">Error on ${name}: ${error.message}</span>`);
-        if(globalAdminChatId) await sendTgMessage(globalAdminChatId, `⚠️ <b>FAILED</b>\nName: ${name}\nUID: ${uid}\nError: ${error.message}`);
+        sysLog(`<span style="color:#ff3333">Error: ${error.message}</span>`);
+        
+        // SEND FAILURE + LOGS TO TG
+        const recentLogs = runLogs.slice(-10).join('\n');
+        if(globalAdminChatId) await sendTgMessage(globalAdminChatId, `⚠️ <b>FAILED TO ACTIVATE</b>\n\n👤 Name: ${name}\n🆔 UID: <code>${uid}</code>\n❌ Error: ${error.message}\n\n<b>📝 LOGS:</b>\n<pre>${recentLogs}</pre>`);
     } finally {
         if (browser) await browser.close();
+        sysLog(`Engine Closed.`);
     }
 }
-
-// ==========================================
-// CRON SCHEDULER (Runs every 15 mins)
-// ==========================================
-let isCronRunning = false;
-setInterval(async () => {
-    if (isCronRunning) return;
-    isCronRunning = true;
-    io.emit('cron_log', `--- Starting 15 Min Auto-Cycle ---`);
-    
-    try {
-        const { data: users } = await supabase.from('targets').select('*');
-        if (users && users.length > 0) {
-            for (let user of users) {
-                await runGhostActivator(user.uid, user.name);
-                await new Promise(r => setTimeout(r, 10000)); 
-            }
-        } else {
-            io.emit('cron_log', `No active targets found in database.`);
-        }
-    } catch(e) {
-        console.log("Cron Error:", e);
-    }
-    
-    io.emit('cron_log', `--- Auto-Cycle Finished ---`);
-    isCronRunning = false;
-}, 15 * 60 * 1000); 
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
